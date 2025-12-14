@@ -6,8 +6,9 @@ import { DataTable } from '@/components/DataTable';
 import { SelectivityAnalysis } from '@/components/SelectivityAnalysis';
 import { Charts } from '@/components/Charts';
 import { WaterExchangeAnalysis } from '@/components/WaterExchangeAnalysis';
+import { MutantRanking } from '@/components/MutantRanking';
 import { Sidebar } from '@/components/Sidebar';
-import { Upload, Table, PieChart, LineChart, Download, Droplets } from 'lucide-react';
+import { Upload, Table, PieChart, LineChart, Download, Droplets, FlaskConical } from 'lucide-react';
 
 export default function Home() {
   const { rawData, processedData, activeTab, setActiveTab, selectedElements, selectedSamples } =
@@ -137,6 +138,17 @@ export default function Home() {
             <Droplets className="w-4 h-4" />
             k_ex Analysis
           </button>
+          <button
+            onClick={() => setActiveTab('ranking')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-t-lg transition-colors ${
+              activeTab === 'ranking'
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            <FlaskConical className="w-4 h-4" />
+            Mutant Ranking
+          </button>
         </div>
       </header>
 
@@ -149,6 +161,7 @@ export default function Home() {
           {activeTab === 'selectivity' && <SelectivityAnalysis />}
           {activeTab === 'charts' && <Charts />}
           {activeTab === 'kex' && <WaterExchangeAnalysis />}
+          {activeTab === 'ranking' && <MutantRanking />}
         </main>
       </div>
     </div>
