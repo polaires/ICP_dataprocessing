@@ -22,24 +22,32 @@ function extractElement(header: string): string | null {
 }
 
 /**
- * Parse ICP-OES CSV data
+ * Detect if a row is a method/batch header row
  */
-export function parseICPData(csvText: string): ParsedData {
-  const result = Papa.parse<string[]>(csvText, {
-    skipEmptyLines: true,
-  });
+function isMethodRow(row: string[]): boolean {
+  return row[0]?.trim().toLowerCase() === 'method';
+}
 
-  const rows = result.data;
+/**
+ * Detect if a row is a column header row (Sample, Type, Elements...)
+ */
+function isHeaderRow(row: string[]): boolean {
+  return row[0]?.trim().toLowerCase() === 'sample';
+}
 
-  if (rows.length < 4) {
-    throw new Error('CSV must have at least 4 rows (method, headers, units, data)');
-  }
-
+/**
+ * Parse a single batch of ICP-OES data
+ */
+function parseBatch(
+  rows: string[][],
+  startIndex: number,
+  batchId: number
+): { measurements: RawMeasurement[]; elements: string[]; units: string; method: string; endIndex: number } {
   // Row 0: Method name
-  const method = rows[0][1]?.trim() || 'Unknown Method';
+  const method = rows[startIndex][1]?.trim() || 'Unknown Method';
 
   // Row 1: Headers - Sample, Type, Element1, Element2, ...
-  const headers = rows[1];
+  const headers = rows[startIndex + 1];
   const elementColumns: { index: number; element: string }[] = [];
 
   for (let i = 2; i < headers.length; i++) {
@@ -59,16 +67,26 @@ export function parseICPData(csvText: string): ParsedData {
     });
 
   // Row 2: Units (usually mg/L)
-  const units = rows[2][2]?.trim() || 'mg/L';
+  const units = rows[startIndex + 2][2]?.trim() || 'mg/L';
 
-  // Rows 3+: Data
+  // Rows 3+: Data until next batch or end
   const measurements: RawMeasurement[] = [];
+  let i = startIndex + 3;
 
-  for (let i = 3; i < rows.length; i++) {
+  while (i < rows.length) {
     const row = rows[i];
     const sampleName = row[0]?.trim();
 
-    if (!sampleName) continue;
+    // Check if we've hit a new batch
+    if (isMethodRow(row)) {
+      break;
+    }
+
+    // Skip empty rows or header rows
+    if (!sampleName || isHeaderRow(row)) {
+      i++;
+      continue;
+    }
 
     const values: Record<string, number> = {};
 
@@ -79,19 +97,77 @@ export function parseICPData(csvText: string): ParsedData {
     }
 
     measurements.push({
-      id: `sample-${i - 3}`,
+      id: `batch${batchId}-sample-${measurements.length}`,
       originalName: sampleName,
       displayName: sampleName,
       type: row[1]?.trim() || '',
       values,
+      batchId,
     });
+
+    i++;
   }
+
+  return { measurements, elements, units, method, endIndex: i };
+}
+
+/**
+ * Parse ICP-OES CSV data (supports multi-batch files)
+ */
+export function parseICPData(csvText: string): ParsedData {
+  const result = Papa.parse<string[]>(csvText, {
+    skipEmptyLines: false, // Keep empty lines to detect batch boundaries
+  });
+
+  const rows = result.data;
+
+  if (rows.length < 4) {
+    throw new Error('CSV must have at least 4 rows (method, headers, units, data)');
+  }
+
+  // Find all batch start positions (rows starting with "Method")
+  const batchStarts: number[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (isMethodRow(rows[i])) {
+      batchStarts.push(i);
+    }
+  }
+
+  if (batchStarts.length === 0) {
+    throw new Error('No valid batch found (must start with "Method" row)');
+  }
+
+  // Parse all batches
+  const allMeasurements: RawMeasurement[] = [];
+  let allElements = new Set<string>();
+  let method = '';
+  let units = 'mg/L';
+
+  for (let batchIdx = 0; batchIdx < batchStarts.length; batchIdx++) {
+    const startIdx = batchStarts[batchIdx];
+    const batch = parseBatch(rows, startIdx, batchIdx);
+
+    allMeasurements.push(...batch.measurements);
+    batch.elements.forEach(e => allElements.add(e));
+
+    if (batchIdx === 0) {
+      method = batch.method;
+      units = batch.units;
+    }
+  }
+
+  // Sort elements by standard lanthanide order
+  const elements = Array.from(allElements).sort((a, b) => {
+    const aIdx = LANTHANIDE_ORDER.indexOf(a);
+    const bIdx = LANTHANIDE_ORDER.indexOf(b);
+    return aIdx - bIdx;
+  });
 
   return {
     method,
     elements,
     units,
-    measurements,
+    measurements: allMeasurements,
   };
 }
 

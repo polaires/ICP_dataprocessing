@@ -24,7 +24,7 @@ interface DataStore {
   selectedSamples: string[];
   showNormalized: boolean;
   unitMode: 'mg/L' | 'µM' | 'selectivity';
-  activeTab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking';
+  activeTab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking' | 'publication';
 
   // Rename history for undo
   renameHistory: { id: string; from: string; to: string }[];
@@ -42,7 +42,7 @@ interface DataStore {
   deselectAllSamples: () => void;
   setShowNormalized: (show: boolean) => void;
   setUnitMode: (mode: 'mg/L' | 'µM' | 'selectivity') => void;
-  setActiveTab: (tab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking') => void;
+  setActiveTab: (tab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking' | 'publication') => void;
   recalculateReplicateGroups: () => void;
 }
 
@@ -126,24 +126,43 @@ export const useDataStore = create<DataStore>((set, get) => ({
   loadCSV: (csvText: string) => {
     const parsed = parseICPData(csvText);
 
-    // Detect buffer
-    const bufferRaw = detectBuffer(parsed.measurements);
-    let bufferMolarity: Record<string, number> | null = null;
+    // Group measurements by batch
+    const measurementsByBatch = new Map<number, RawMeasurement[]>();
+    for (const m of parsed.measurements) {
+      const batchId = m.batchId ?? 0;
+      if (!measurementsByBatch.has(batchId)) {
+        measurementsByBatch.set(batchId, []);
+      }
+      measurementsByBatch.get(batchId)!.push(m);
+    }
 
-    if (bufferRaw) {
-      bufferMolarity = {};
-      for (const element of parsed.elements) {
-        bufferMolarity[element] = mgLToMicromolar(bufferRaw.values[element] ?? 0, element);
+    // Find buffer for each batch and calculate buffer molarities
+    const bufferMolaritiesByBatch = new Map<number, Record<string, number>>();
+    let primaryBuffer: RawMeasurement | null = null;
+
+    for (const [batchId, batchMeasurements] of measurementsByBatch) {
+      const bufferRaw = detectBuffer(batchMeasurements);
+      if (bufferRaw) {
+        const bufferMolarity: Record<string, number> = {};
+        for (const element of parsed.elements) {
+          bufferMolarity[element] = mgLToMicromolar(bufferRaw.values[element] ?? 0, element);
+        }
+        bufferMolaritiesByBatch.set(batchId, bufferMolarity);
+        if (!primaryBuffer) {
+          primaryBuffer = bufferRaw;
+        }
       }
     }
 
-    // Process all measurements
-    const processed = parsed.measurements.map(raw =>
-      processRawMeasurement(raw, parsed.elements, bufferMolarity)
-    );
+    // Process all measurements with per-batch buffer normalization
+    const processed = parsed.measurements.map(raw => {
+      const batchId = raw.batchId ?? 0;
+      const bufferMolarity = bufferMolaritiesByBatch.get(batchId) || null;
+      return processRawMeasurement(raw, parsed.elements, bufferMolarity);
+    });
 
-    const bufferProcessed = bufferRaw
-      ? processed.find(p => p.id === bufferRaw.id) || null
+    const bufferProcessed = primaryBuffer
+      ? processed.find(p => p.id === primaryBuffer!.id) || null
       : null;
 
     // Build replicate groups
@@ -284,7 +303,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     set({ unitMode: mode });
   },
 
-  setActiveTab: (tab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking') => {
+  setActiveTab: (tab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking' | 'publication') => {
     set({ activeTab: tab });
   },
 
