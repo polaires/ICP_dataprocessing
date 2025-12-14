@@ -73,3 +73,59 @@ export const CONDITION_KEYWORDS = {
   water: ['h2o', 'water', 'aqueous', 'aq'],
   acid: ['atc', 'acetic', 'acid', 'hac', 'acetate'],
 };
+
+// Water exchange rates (k_ex) in units of 10^8 s^-1
+// Reference: Helm & Merbach, Chem. Rev. 2005
+export const WATER_EXCHANGE_RATES: Record<string, number> = {
+  La: 2.1,
+  Ce: 3.3,
+  Pr: 4.4,
+  Nd: 5.2,
+  Sm: 7.4,
+  Eu: 6.6,
+  Gd: 6.7,
+  Tb: 5.2,
+  Dy: 4.2,
+  Ho: 2.8,
+  Er: 1.9,
+  Tm: 1.4,
+  Yb: 0.8,
+  Lu: 0.6,
+};
+
+// Unpaired electrons for lanthanide 3+ ions
+export const UNPAIRED_ELECTRONS: Record<string, number> = {
+  La: 0,
+  Ce: 1,
+  Pr: 2,
+  Nd: 3,
+  Pm: 4,
+  Sm: 5,
+  Eu: 6,
+  Gd: 7,
+  Tb: 6,
+  Dy: 5,
+  Ho: 4,
+  Er: 3,
+  Tm: 2,
+  Yb: 1,
+  Lu: 0,
+};
+
+// Ionic radii in pm (for display, same as Å * 100)
+export const IONIC_RADII_PM: Record<string, number> = {
+  La: 103.2,
+  Ce: 101.0,
+  Pr: 99.0,
+  Nd: 98.3,
+  Sm: 95.8,
+  Eu: 94.7,
+  Gd: 93.8,
+  Tb: 92.3,
+  Dy: 91.2,
+  Ho: 90.1,
+  Er: 89.0,
+  Tm: 88.0,
+  Yb: 86.8,
+  Lu: 86.1,
+};

@@ -5,8 +5,9 @@ import { DataUploader } from '@/components/DataUploader';
 import { DataTable } from '@/components/DataTable';
 import { SelectivityAnalysis } from '@/components/SelectivityAnalysis';
 import { Charts } from '@/components/Charts';
+import { WaterExchangeAnalysis } from '@/components/WaterExchangeAnalysis';
 import { Sidebar } from '@/components/Sidebar';
-import { Upload, Table, PieChart, LineChart, Download } from 'lucide-react';
+import { Upload, Table, PieChart, LineChart, Download, Droplets } from 'lucide-react';
 
 export default function Home() {
   const { rawData, processedData, activeTab, setActiveTab, selectedElements, selectedSamples } =
@@ -125,6 +126,17 @@ export default function Home() {
             <LineChart className="w-4 h-4" />
             Charts
           </button>
+          <button
+            onClick={() => setActiveTab('kex')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-t-lg transition-colors ${
+              activeTab === 'kex'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            <Droplets className="w-4 h-4" />
+            k_ex Analysis
+          </button>
         </div>
       </header>
 
@@ -136,6 +148,7 @@ export default function Home() {
           {activeTab === 'table' && <DataTable />}
           {activeTab === 'selectivity' && <SelectivityAnalysis />}
           {activeTab === 'charts' && <Charts />}
+          {activeTab === 'kex' && <WaterExchangeAnalysis />}
         </main>
       </div>
     </div>
