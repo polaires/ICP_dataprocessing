@@ -24,7 +24,7 @@ interface DataStore {
   selectedSamples: string[];
   showNormalized: boolean;
   unitMode: 'mg/L' | 'µM' | 'selectivity';
-  activeTab: 'table' | 'selectivity' | 'charts' | 'kex';
+  activeTab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking';
 
   // Rename history for undo
   renameHistory: { id: string; from: string; to: string }[];
@@ -42,7 +42,7 @@ interface DataStore {
   deselectAllSamples: () => void;
   setShowNormalized: (show: boolean) => void;
   setUnitMode: (mode: 'mg/L' | 'µM' | 'selectivity') => void;
-  setActiveTab: (tab: 'table' | 'selectivity' | 'charts' | 'kex') => void;
+  setActiveTab: (tab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking') => void;
   recalculateReplicateGroups: () => void;
 }
 
@@ -284,7 +284,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     set({ unitMode: mode });
   },
 
-  setActiveTab: (tab: 'table' | 'selectivity' | 'charts' | 'kex') => {
+  setActiveTab: (tab: 'table' | 'selectivity' | 'charts' | 'kex' | 'ranking') => {
     set({ activeTab: tab });
   },
 

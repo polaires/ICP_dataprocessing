@@ -4,6 +4,11 @@ import { useMemo, useState } from 'react';
 import { useDataStore } from '@/store/useDataStore';
 import { LANTHANIDE_ORDER, ELEMENT_COLORS } from '@/lib/constants';
 import {
+  combinedOutlierDetection,
+  assessDataQuality,
+  DataQualityAssessment,
+} from '@/lib/statistics';
+import {
   BarChart,
   Bar,
   XAxis,
@@ -18,7 +23,7 @@ import {
   PolarRadiusAxis,
   Radar,
 } from 'recharts';
-import { AlertTriangle, ArrowLeftRight, Info } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Info, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 
 // Threshold for considering a sample as "binding" (total µM after buffer subtraction)
 const DEFAULT_BINDING_THRESHOLD = 0.5; // µM
@@ -125,13 +130,22 @@ export function SelectivityAnalysis() {
     });
   }, [sampleBindingStatus, elements]);
 
-  // Replicate group summary
+  // Replicate group summary with quality assessment
   const groupStats = useMemo(() => {
     return replicateGroups
       .filter(g => g.measurements.some(m => selectedSamples.includes(m.id)))
       .filter(g => !g.measurements.some(m => m.id === bufferMeasurement?.id))
       .map(g => {
-        // Calculate total molarity for the group
+        // Calculate total molarity for each replicate
+        const replicateTotals = g.measurements.map(m =>
+          elements.reduce((sum, e) => sum + Math.max(0, m.normalizedMolarity[e] ?? 0), 0)
+        );
+
+        // Detect outliers
+        const outlierResult = combinedOutlierDetection(replicateTotals, 2);
+        const outlierSamples = outlierResult.outlierIndices.map(i => g.measurements[i].displayName);
+
+        // Calculate total molarity for the group (excluding outliers for stats)
         const totalMolarity = elements.reduce((sum, e) => {
           const val = g.mean[e] ?? 0;
           return sum + Math.max(0, val);
@@ -145,6 +159,9 @@ export function SelectivityAnalysis() {
         const cvValues = elements.map(e => g.cv[e] ?? 0);
         const avgCV = cvValues.length > 0 ? cvValues.reduce((a, b) => a + b, 0) / cvValues.length : 0;
 
+        // Assess overall data quality
+        const qualityAssessment = assessDataQuality(replicateTotals);
+
         return {
           group: g.baseName,
           nReplicates: g.measurements.length,
@@ -154,6 +171,9 @@ export function SelectivityAnalysis() {
           maxSelectivity,
           avgCV,
           meanSelectivity: g.meanSelectivity,
+          outlierSamples,
+          hasOutliers: outlierSamples.length > 0,
+          qualityAssessment,
         };
       });
   }, [replicateGroups, elements, selectedSamples, bufferMeasurement, bindingThreshold]);
@@ -529,12 +549,66 @@ export function SelectivityAnalysis() {
       {groupStats.length > 0 && groupStats.some(g => g.nReplicates > 1) && (
         <div>
           <h3 className="text-lg font-semibold mb-4">Replicate Group Summary</h3>
+
+          {/* Data Quality Warnings */}
+          {groupStats.some(g => g.qualityAssessment.quality === 'poor' || g.qualityAssessment.quality === 'unreliable') && (
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="font-semibold text-orange-800">Data Quality Warning</h4>
+                  <p className="text-sm text-orange-700 mt-1">
+                    Some groups have high variability. Consider reviewing experimental conditions or excluding outliers.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {groupStats
+                      .filter(g => g.qualityAssessment.quality === 'poor' || g.qualityAssessment.quality === 'unreliable')
+                      .map(g => (
+                        <span key={g.group} className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded">
+                          {g.group}: CV {g.avgCV.toFixed(0)}%
+                          {g.hasOutliers && ` (${g.outlierSamples.length} outlier)`}
+                        </span>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Outlier Warning */}
+          {groupStats.some(g => g.hasOutliers) && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <div className="flex items-start gap-3">
+                <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="font-semibold text-red-800">Outliers Detected</h4>
+                  <p className="text-sm text-red-700 mt-1">
+                    The following samples show significant deviation from their group and may affect analysis:
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {groupStats
+                      .filter(g => g.hasOutliers)
+                      .flatMap(g => g.outlierSamples.map(s => (
+                        <span key={s} className="px-2 py-1 bg-red-100 text-red-800 text-xs rounded">
+                          {s}
+                        </span>
+                      )))}
+                  </div>
+                  <p className="text-xs text-red-600 mt-2">
+                    Use the Mutant Ranking tab for detailed outlier analysis and exclusion options.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="bg-gray-100">
                   <th className="border border-gray-300 px-3 py-2 text-left">Group</th>
                   <th className="border border-gray-300 px-3 py-2 text-center">n</th>
+                  <th className="border border-gray-300 px-3 py-2 text-center">Quality</th>
                   <th className="border border-gray-300 px-3 py-2 text-center">Status</th>
                   <th className="border border-gray-300 px-3 py-2 text-center">Top Element</th>
                   <th className="border border-gray-300 px-3 py-2 text-center">Mean Selectivity</th>
@@ -542,48 +616,85 @@ export function SelectivityAnalysis() {
                 </tr>
               </thead>
               <tbody>
-                {groupStats.map(stat => (
-                  <tr
-                    key={stat.group}
-                    className={`hover:bg-blue-50 ${!stat.isBinding ? 'bg-gray-50 text-gray-500' : ''}`}
-                  >
-                    <td className="border border-gray-300 px-3 py-2 font-medium">{stat.group}</td>
-                    <td className="border border-gray-300 px-3 py-2 text-center">
-                      {stat.nReplicates}
-                    </td>
-                    <td className="border border-gray-300 px-3 py-2 text-center">
-                      {stat.isBinding ? (
-                        <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">
-                          Binding
+                {groupStats.map(stat => {
+                  const qualityStyles: Record<DataQualityAssessment['quality'], string> = {
+                    excellent: 'bg-green-100 text-green-800 border-green-300',
+                    good: 'bg-blue-100 text-blue-800 border-blue-300',
+                    acceptable: 'bg-yellow-100 text-yellow-800 border-yellow-300',
+                    poor: 'bg-orange-100 text-orange-800 border-orange-300',
+                    unreliable: 'bg-red-100 text-red-800 border-red-300',
+                  };
+
+                  return (
+                    <tr
+                      key={stat.group}
+                      className={`hover:bg-blue-50 ${!stat.isBinding ? 'bg-gray-50 text-gray-500' : ''} ${stat.hasOutliers ? 'bg-red-50' : ''}`}
+                    >
+                      <td className="border border-gray-300 px-3 py-2 font-medium">
+                        <div className="flex items-center gap-2">
+                          {stat.group}
+                          {stat.hasOutliers && (
+                            <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded" title={`Outliers: ${stat.outlierSamples.join(', ')}`}>
+                              {stat.outlierSamples.length} outlier
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="border border-gray-300 px-3 py-2 text-center">
+                        {stat.nReplicates}
+                      </td>
+                      <td className="border border-gray-300 px-3 py-2 text-center">
+                        <span className={`px-2 py-0.5 text-xs font-medium rounded border ${qualityStyles[stat.qualityAssessment.quality]}`}>
+                          {stat.qualityAssessment.quality}
                         </span>
-                      ) : (
-                        <span className="px-2 py-0.5 bg-gray-200 text-gray-600 text-xs rounded">
-                          No binding
-                        </span>
-                      )}
-                    </td>
-                    <td className="border border-gray-300 px-3 py-2 text-center">
-                      {stat.isBinding ? (
-                        <span
-                          className="px-2 py-1 rounded text-white text-xs font-bold"
-                          style={{ backgroundColor: ELEMENT_COLORS[stat.maxElement] || '#666' }}
-                        >
-                          {stat.maxElement}
-                        </span>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-                    <td className="border border-gray-300 px-3 py-2 text-center font-mono">
-                      {stat.isBinding ? stat.maxSelectivity.toFixed(1) + '%' : '-'}
-                    </td>
-                    <td className="border border-gray-300 px-3 py-2 text-center font-mono">
-                      {stat.isBinding ? stat.avgCV.toFixed(1) + '%' : '-'}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="border border-gray-300 px-3 py-2 text-center">
+                        {stat.isBinding ? (
+                          <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">
+                            Binding
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 bg-gray-200 text-gray-600 text-xs rounded">
+                            No binding
+                          </span>
+                        )}
+                      </td>
+                      <td className="border border-gray-300 px-3 py-2 text-center">
+                        {stat.isBinding ? (
+                          <span
+                            className="px-2 py-1 rounded text-white text-xs font-bold"
+                            style={{ backgroundColor: ELEMENT_COLORS[stat.maxElement] || '#666' }}
+                          >
+                            {stat.maxElement}
+                          </span>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
+                      <td className="border border-gray-300 px-3 py-2 text-center font-mono">
+                        {stat.isBinding ? stat.maxSelectivity.toFixed(1) + '%' : '-'}
+                      </td>
+                      <td className={`border border-gray-300 px-3 py-2 text-center font-mono ${
+                        stat.avgCV > 30 ? 'text-red-600 font-semibold' :
+                        stat.avgCV > 20 ? 'text-orange-600' : ''
+                      }`}>
+                        {stat.isBinding ? stat.avgCV.toFixed(1) + '%' : '-'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+
+          {/* Quality Legend */}
+          <div className="flex items-center gap-4 mt-3 text-xs text-gray-600">
+            <span className="font-medium">Quality:</span>
+            <span className="px-2 py-0.5 bg-green-100 text-green-800 rounded border border-green-300">excellent (CV≤10%)</span>
+            <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded border border-blue-300">good (CV≤20%)</span>
+            <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded border border-yellow-300">acceptable (CV≤30%)</span>
+            <span className="px-2 py-0.5 bg-orange-100 text-orange-800 rounded border border-orange-300">poor (CV≤50%)</span>
+            <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded border border-red-300">unreliable (CV&gt;50%)</span>
           </div>
         </div>
       )}
