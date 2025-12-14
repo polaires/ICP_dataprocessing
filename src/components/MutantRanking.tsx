@@ -6,13 +6,23 @@ import {
   LANTHANIDE_ORDER,
   WATER_EXCHANGE_RATES,
   ELEMENT_COLORS,
+  LIGHT_REE,
+  HEAVY_REE,
 } from '@/lib/constants';
 import {
   linearRegression,
+  LinearRegressionResult,
   meanAndSE,
   combinedOutlierDetection,
   assessDataQuality,
   DataQualityAssessment,
+  selectivityEntropy,
+  lightHeavyDiscrimination,
+  kexPreferenceStrength,
+  calculateLightHeavyOffset,
+  LightHeavyOffsetResult,
+  compareMutants as compareMutantStats,
+  PairwiseComparisonResult,
 } from '@/lib/statistics';
 import {
   BarChart,
@@ -27,6 +37,9 @@ import {
   Scatter,
   Cell,
   ReferenceLine,
+  ComposedChart,
+  Line,
+  ErrorBar,
 } from 'recharts';
 import {
   AlertTriangle,
@@ -40,6 +53,8 @@ import {
   Minus,
   Eye,
   EyeOff,
+  BarChart3,
+  Zap,
 } from 'lucide-react';
 
 interface MutantAnalysis {
@@ -66,10 +81,22 @@ interface MutantAnalysis {
     sampleName: string;
     isOutlier: boolean;
     values: Record<string, number>;
+    totalMolarity: number;
   }>;
+  // New metrics
+  entropy: number;
+  normalizedEntropy: number;
+  entropyInterpretation: string;
+  lightHeavyScore: number;
+  lightHeavyPreference: 'light' | 'heavy' | 'balanced';
+  kexStrength: number;
+  kexStrengthInterpretation: string;
+  lightHeavyOffset: LightHeavyOffsetResult;
+  lightRegression: LinearRegressionResult | null;
+  heavyRegression: LinearRegressionResult | null;
 }
 
-type SortField = 'name' | 'kexSlope' | 'kexR2' | 'topSelectivity' | 'avgCV' | 'totalMolarity' | 'nReplicates';
+type SortField = 'name' | 'kexSlope' | 'kexR2' | 'topSelectivity' | 'avgCV' | 'totalMolarity' | 'nReplicates' | 'entropy' | 'lightHeavyScore' | 'kexStrength';
 type SortDirection = 'asc' | 'desc';
 
 const BINDING_THRESHOLD = 0.5; // µM
@@ -87,7 +114,7 @@ export function MutantRanking() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [showOutliers, setShowOutliers] = useState(false);
   const [selectedMutant, setSelectedMutant] = useState<string | null>(null);
-  const [compareMutants, setCompareMutants] = useState<string[]>([]);
+  const [comparingMutants, setComparingMutants] = useState<string[]>([]);
 
   // Get elements with k_ex data
   const elementsWithKex = useMemo(() => {
@@ -200,7 +227,48 @@ export function MutantRanking() {
         values: Object.fromEntries(
           elementsWithKex.map(e => [e, m.selectivity[e] ?? 0])
         ),
+        totalMolarity: totalMolarities[i],
       }));
+
+      // Calculate new metrics
+      const meanSelectivityProfile: Record<string, number> = {};
+      for (const e of elementsWithKex) {
+        meanSelectivityProfile[e] = selectivityProfile[e]?.mean ?? 0;
+      }
+
+      // Entropy
+      const entropyResult = selectivityEntropy(meanSelectivityProfile);
+
+      // Light/Heavy discrimination
+      const lightElements = elementsWithKex.filter(e => LIGHT_REE.includes(e));
+      const heavyElements = elementsWithKex.filter(e => HEAVY_REE.includes(e));
+      const lhResult = lightHeavyDiscrimination(meanSelectivityProfile, lightElements, heavyElements);
+
+      // k_ex preference strength
+      const kexStrengthResult = kexPreferenceStrength(kexSlope, kexSlopeError, kexR2, kexPValue);
+
+      // Calculate separate regressions for light and heavy lanthanides
+      let lightRegression: LinearRegressionResult | null = null;
+      let heavyRegression: LinearRegressionResult | null = null;
+
+      if (isBinding) {
+        const lightKex = lightElements.map(e => WATER_EXCHANGE_RATES[e]!);
+        const lightSel = lightElements.map(e => selectivityProfile[e]?.mean ?? 0);
+        const heavyKex = heavyElements.map(e => WATER_EXCHANGE_RATES[e]!);
+        const heavySel = heavyElements.map(e => selectivityProfile[e]?.mean ?? 0);
+
+        if (lightKex.length >= 2 && lightSel.some(v => v > 0)) {
+          lightRegression = linearRegression(lightKex, lightSel);
+        }
+        if (heavyKex.length >= 2 && heavySel.some(v => v > 0)) {
+          heavyRegression = linearRegression(heavyKex, heavySel);
+        }
+      }
+
+      // Light/Heavy offset
+      const midpointKex = (Math.max(...elementsWithKex.map(e => WATER_EXCHANGE_RATES[e]!)) +
+                          Math.min(...elementsWithKex.map(e => WATER_EXCHANGE_RATES[e]!))) / 2;
+      const lightHeavyOffset = calculateLightHeavyOffset(lightRegression, heavyRegression, midpointKex);
 
       analyses.push({
         name: group.baseName,
@@ -223,6 +291,17 @@ export function MutantRanking() {
         dataQuality,
         selectivityProfile,
         rawReplicateData,
+        // New metrics
+        entropy: entropyResult.entropy,
+        normalizedEntropy: entropyResult.normalizedEntropy,
+        entropyInterpretation: entropyResult.interpretation,
+        lightHeavyScore: lhResult.score,
+        lightHeavyPreference: lhResult.preference,
+        kexStrength: kexStrengthResult.strength,
+        kexStrengthInterpretation: kexStrengthResult.interpretation,
+        lightHeavyOffset,
+        lightRegression,
+        heavyRegression,
       });
     }
 
@@ -265,6 +344,15 @@ export function MutantRanking() {
         case 'nReplicates':
           comparison = b.nReplicates - a.nReplicates;
           break;
+        case 'entropy':
+          comparison = a.normalizedEntropy - b.normalizedEntropy; // Lower = more selective
+          break;
+        case 'lightHeavyScore':
+          comparison = Math.abs(b.lightHeavyScore) - Math.abs(a.lightHeavyScore); // Higher magnitude = stronger preference
+          break;
+        case 'kexStrength':
+          comparison = b.kexStrength - a.kexStrength;
+          break;
       }
 
       return sortDirection === 'desc' ? comparison : -comparison;
@@ -272,6 +360,48 @@ export function MutantRanking() {
 
     return sorted;
   }, [mutantAnalyses, sortField, sortDirection]);
+
+  // Calculate pairwise comparisons when comparing mutants
+  const pairwiseComparisons = useMemo((): PairwiseComparisonResult[] => {
+    if (comparingMutants.length < 2) return [];
+
+    const results: PairwiseComparisonResult[] = [];
+    const selectedMutantsForComparison = comparingMutants
+      .map(key => mutantAnalyses.find(m => m.groupKey === key))
+      .filter((m): m is MutantAnalysis => m !== null);
+
+    // Compare each pair
+    for (let i = 0; i < selectedMutantsForComparison.length; i++) {
+      for (let j = i + 1; j < selectedMutantsForComparison.length; j++) {
+        const a = selectedMutantsForComparison[i];
+        const b = selectedMutantsForComparison[j];
+
+        // Compare total molarity
+        const molaritiesA = a.rawReplicateData.filter(r => !r.isOutlier).map(r => r.totalMolarity);
+        const molaritiesB = b.rawReplicateData.filter(r => !r.isOutlier).map(r => r.totalMolarity);
+
+        if (molaritiesA.length >= 2 && molaritiesB.length >= 2) {
+          results.push(compareMutantStats(molaritiesA, molaritiesB, a.name, b.name, 'Total Binding'));
+        }
+      }
+    }
+
+    return results;
+  }, [comparingMutants, mutantAnalyses]);
+
+  // Box plot data for replicate distributions
+  const boxPlotData = useMemo(() => {
+    if (!selectedMutant) return null;
+
+    const analysis = mutantAnalyses.find(m => m.groupKey === selectedMutant);
+    if (!analysis) return null;
+
+    return analysis.rawReplicateData.map(rep => ({
+      name: rep.sampleName.replace(analysis.name, '').replace(/^[-_]/, '') || rep.sampleName,
+      value: rep.totalMolarity,
+      isOutlier: rep.isOutlier,
+    }));
+  }, [selectedMutant, mutantAnalyses]);
 
   // Binding vs non-binding
   const bindingMutants = sortedAnalyses.filter(m => m.isBinding);
@@ -284,9 +414,9 @@ export function MutantRanking() {
 
   // Comparison chart data
   const comparisonData = useMemo(() => {
-    if (compareMutants.length < 2) return null;
+    if (comparingMutants.length < 2) return null;
 
-    const selected = compareMutants
+    const selected = comparingMutants
       .map(key => mutantAnalyses.find(m => m.groupKey === key))
       .filter((m): m is MutantAnalysis => m !== null);
 
@@ -314,7 +444,7 @@ export function MutantRanking() {
     }));
 
     return { barData, scatterData, mutants: selected };
-  }, [compareMutants, mutantAnalyses, elementsWithKex]);
+  }, [comparingMutants, mutantAnalyses, elementsWithKex]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -326,7 +456,7 @@ export function MutantRanking() {
   };
 
   const toggleCompare = (groupKey: string) => {
-    setCompareMutants(prev =>
+    setComparingMutants(prev =>
       prev.includes(groupKey)
         ? prev.filter(k => k !== groupKey)
         : prev.length < 4
@@ -396,12 +526,12 @@ export function MutantRanking() {
               )}
             </label>
 
-            {compareMutants.length > 0 && (
+            {comparingMutants.length > 0 && (
               <button
-                onClick={() => setCompareMutants([])}
+                onClick={() => setComparingMutants([])}
                 className="px-3 py-1.5 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
               >
-                Clear Comparison ({compareMutants.length})
+                Clear Comparison ({comparingMutants.length})
               </button>
             )}
           </div>
@@ -525,6 +655,36 @@ export function MutantRanking() {
                     <ArrowUpDown className="w-3 h-3" />
                   </div>
                 </th>
+                <th
+                  className="px-3 py-2 text-center cursor-pointer hover:bg-gray-200"
+                  onClick={() => handleSort('entropy')}
+                  title="Lower entropy = more selective"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    Selectivity
+                    <ArrowUpDown className="w-3 h-3" />
+                  </div>
+                </th>
+                <th
+                  className="px-3 py-2 text-center cursor-pointer hover:bg-gray-200"
+                  onClick={() => handleSort('lightHeavyScore')}
+                  title="Positive = prefers light REE, Negative = prefers heavy REE"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    L/H Pref.
+                    <ArrowUpDown className="w-3 h-3" />
+                  </div>
+                </th>
+                <th
+                  className="px-3 py-2 text-center cursor-pointer hover:bg-gray-200"
+                  onClick={() => handleSort('kexStrength')}
+                  title="k_ex preference strength index (0-1)"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    k_ex Str.
+                    <ArrowUpDown className="w-3 h-3" />
+                  </div>
+                </th>
                 <th className="px-3 py-2 text-center">Actions</th>
               </tr>
             </thead>
@@ -542,7 +702,7 @@ export function MutantRanking() {
                   <td className="px-3 py-2 text-center">
                     <input
                       type="checkbox"
-                      checked={compareMutants.includes(analysis.groupKey)}
+                      checked={comparingMutants.includes(analysis.groupKey)}
                       onChange={() => toggleCompare(analysis.groupKey)}
                       disabled={!analysis.isBinding}
                       className="rounded"
@@ -625,6 +785,73 @@ export function MutantRanking() {
                     </span>
                   </td>
                   <td className="px-3 py-2 text-center">
+                    {analysis.isBinding ? (
+                      <span
+                        className={`px-2 py-0.5 text-xs rounded ${
+                          analysis.entropyInterpretation === 'highly selective'
+                            ? 'bg-green-100 text-green-800'
+                            : analysis.entropyInterpretation === 'selective'
+                              ? 'bg-blue-100 text-blue-800'
+                              : analysis.entropyInterpretation === 'moderate'
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-gray-100 text-gray-800'
+                        }`}
+                        title={`Entropy: ${analysis.entropy.toFixed(2)}, Normalized: ${(analysis.normalizedEntropy * 100).toFixed(0)}%`}
+                      >
+                        {analysis.entropyInterpretation}
+                      </span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {analysis.isBinding ? (
+                      <span
+                        className={`px-2 py-0.5 text-xs font-mono rounded ${
+                          analysis.lightHeavyPreference === 'light'
+                            ? 'bg-orange-100 text-orange-800'
+                            : analysis.lightHeavyPreference === 'heavy'
+                              ? 'bg-purple-100 text-purple-800'
+                              : 'bg-gray-100 text-gray-600'
+                        }`}
+                        title={`Light/Heavy Score: ${analysis.lightHeavyScore.toFixed(2)}`}
+                      >
+                        {analysis.lightHeavyPreference === 'light'
+                          ? `L+${Math.abs(analysis.lightHeavyScore).toFixed(1)}`
+                          : analysis.lightHeavyPreference === 'heavy'
+                            ? `H+${Math.abs(analysis.lightHeavyScore).toFixed(1)}`
+                            : '~0'}
+                      </span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {analysis.isBinding ? (
+                      <div
+                        className="flex items-center justify-center gap-1"
+                        title={`k_ex preference strength: ${analysis.kexStrengthInterpretation}`}
+                      >
+                        <Zap
+                          className={`w-3 h-3 ${
+                            analysis.kexStrengthInterpretation === 'strong'
+                              ? 'text-green-600'
+                              : analysis.kexStrengthInterpretation === 'moderate'
+                                ? 'text-yellow-600'
+                                : analysis.kexStrengthInterpretation === 'weak'
+                                  ? 'text-orange-600'
+                                  : 'text-gray-400'
+                          }`}
+                        />
+                        <span className="font-mono text-xs">
+                          {(analysis.kexStrength * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
                     <button
                       onClick={() =>
                         setSelectedMutant(selectedMutant === analysis.groupKey ? null : analysis.groupKey)
@@ -691,6 +918,144 @@ export function MutantRanking() {
               </div>
             </div>
           ) : null}
+
+          {/* Advanced Metrics Summary */}
+          {selectedAnalysis.isBinding && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* Entropy/Selectivity */}
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-500 mb-1">Selectivity Breadth</div>
+                <div className="flex items-baseline gap-2">
+                  <span className={`text-lg font-bold ${
+                    selectedAnalysis.entropyInterpretation === 'highly selective'
+                      ? 'text-green-600'
+                      : selectedAnalysis.entropyInterpretation === 'selective'
+                        ? 'text-blue-600'
+                        : selectedAnalysis.entropyInterpretation === 'moderate'
+                          ? 'text-yellow-600'
+                          : 'text-gray-600'
+                  }`}>
+                    {selectedAnalysis.entropyInterpretation}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-400 mt-1">
+                  Entropy: {selectedAnalysis.entropy.toFixed(2)} ({(selectedAnalysis.normalizedEntropy * 100).toFixed(0)}% of max)
+                </div>
+              </div>
+
+              {/* Light/Heavy Preference */}
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-500 mb-1">L/H REE Preference</div>
+                <div className="flex items-baseline gap-2">
+                  <span className={`text-lg font-bold ${
+                    selectedAnalysis.lightHeavyPreference === 'light'
+                      ? 'text-orange-600'
+                      : selectedAnalysis.lightHeavyPreference === 'heavy'
+                        ? 'text-purple-600'
+                        : 'text-gray-600'
+                  }`}>
+                    {selectedAnalysis.lightHeavyPreference === 'light'
+                      ? 'Light REE'
+                      : selectedAnalysis.lightHeavyPreference === 'heavy'
+                        ? 'Heavy REE'
+                        : 'Balanced'}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-400 mt-1">
+                  Score: {selectedAnalysis.lightHeavyScore.toFixed(2)}
+                </div>
+              </div>
+
+              {/* k_ex Strength */}
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-500 mb-1">k_ex Preference Strength</div>
+                <div className="flex items-center gap-2">
+                  <Zap className={`w-5 h-5 ${
+                    selectedAnalysis.kexStrengthInterpretation === 'strong'
+                      ? 'text-green-600'
+                      : selectedAnalysis.kexStrengthInterpretation === 'moderate'
+                        ? 'text-yellow-600'
+                        : selectedAnalysis.kexStrengthInterpretation === 'weak'
+                          ? 'text-orange-600'
+                          : 'text-gray-400'
+                  }`} />
+                  <span className="text-lg font-bold">
+                    {selectedAnalysis.kexStrengthInterpretation}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-400 mt-1">
+                  Index: {(selectedAnalysis.kexStrength * 100).toFixed(0)}%
+                </div>
+              </div>
+
+              {/* Light/Heavy Offset */}
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-500 mb-1">L/H Line Offset</div>
+                {selectedAnalysis.lightHeavyOffset.isSignificant ? (
+                  <>
+                    <div className="text-lg font-bold text-blue-600">
+                      {selectedAnalysis.lightHeavyOffset.offset.toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {selectedAnalysis.lightHeavyOffset.interpretation}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-gray-500">
+                    {selectedAnalysis.lightHeavyOffset.interpretation}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Box Plot - Replicate Distribution */}
+          {boxPlotData && boxPlotData.length > 0 && (
+            <div>
+              <h4 className="font-medium mb-2 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4" />
+                Replicate Distribution (Total Binding)
+              </h4>
+              <div className="h-[200px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={boxPlotData} margin={{ top: 10, right: 30, left: 20, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis label={{ value: 'Total µM', angle: -90, position: 'insideLeft' }} />
+                    <Tooltip
+                      formatter={(value: number) => [`${value.toFixed(2)} µM`, 'Total Binding']}
+                    />
+                    <Bar dataKey="value" name="Total Binding">
+                      {boxPlotData.map((entry, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={entry.isOutlier ? '#ef4444' : '#3b82f6'}
+                          opacity={entry.isOutlier ? 0.6 : 1}
+                        />
+                      ))}
+                    </Bar>
+                    <ReferenceLine
+                      y={selectedAnalysis.totalMolarity}
+                      stroke="#10b981"
+                      strokeDasharray="5 5"
+                      label={{ value: 'Mean', position: 'right', fill: '#10b981' }}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex gap-4 text-xs text-gray-500 mt-2">
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-3 bg-blue-500 rounded-sm" /> Valid
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-3 bg-red-500 opacity-60 rounded-sm" /> Outlier
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-6 h-0.5 bg-green-500" style={{ borderStyle: 'dashed' }} /> Mean
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Replicate Details */}
           <div>
@@ -834,7 +1199,7 @@ export function MutantRanking() {
               Comparing: {comparisonData.mutants.map(m => m.name).join(' vs ')}
             </h3>
             <button
-              onClick={() => setCompareMutants([])}
+              onClick={() => setComparingMutants([])}
               className="text-gray-400 hover:text-gray-600"
             >
               <XCircle className="w-5 h-5" />
@@ -931,9 +1296,138 @@ export function MutantRanking() {
                   ))}
                   <td className="border px-3 py-2 text-center">-</td>
                 </tr>
+                <tr className="bg-blue-50">
+                  <td className="border px-3 py-2 font-medium">Selectivity (Entropy)</td>
+                  {comparisonData.mutants.map(m => (
+                    <td key={m.groupKey} className="border px-3 py-2 text-center">
+                      <span className={`px-2 py-0.5 text-xs rounded ${
+                        m.entropyInterpretation === 'highly selective'
+                          ? 'bg-green-100 text-green-800'
+                          : m.entropyInterpretation === 'selective'
+                            ? 'bg-blue-100 text-blue-800'
+                            : m.entropyInterpretation === 'moderate'
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-gray-100 text-gray-800'
+                      }`}>
+                        {m.entropyInterpretation}
+                      </span>
+                    </td>
+                  ))}
+                  <td className="border px-3 py-2 text-center font-semibold text-green-600">
+                    {comparisonData.mutants.reduce((best, curr) =>
+                      curr.normalizedEntropy < best.normalizedEntropy ? curr : best
+                    ).name}
+                  </td>
+                </tr>
+                <tr className="bg-blue-50">
+                  <td className="border px-3 py-2 font-medium">L/H REE Preference</td>
+                  {comparisonData.mutants.map(m => (
+                    <td key={m.groupKey} className="border px-3 py-2 text-center">
+                      <span className={`px-2 py-0.5 text-xs font-mono rounded ${
+                        m.lightHeavyPreference === 'light'
+                          ? 'bg-orange-100 text-orange-800'
+                          : m.lightHeavyPreference === 'heavy'
+                            ? 'bg-purple-100 text-purple-800'
+                            : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {m.lightHeavyPreference === 'light'
+                          ? `Light +${Math.abs(m.lightHeavyScore).toFixed(1)}`
+                          : m.lightHeavyPreference === 'heavy'
+                            ? `Heavy +${Math.abs(m.lightHeavyScore).toFixed(1)}`
+                            : 'Balanced'}
+                      </span>
+                    </td>
+                  ))}
+                  <td className="border px-3 py-2 text-center font-semibold text-green-600">
+                    {comparisonData.mutants.reduce((best, curr) =>
+                      Math.abs(curr.lightHeavyScore) > Math.abs(best.lightHeavyScore) ? curr : best
+                    ).name}
+                  </td>
+                </tr>
+                <tr className="bg-blue-50">
+                  <td className="border px-3 py-2 font-medium">k_ex Strength</td>
+                  {comparisonData.mutants.map(m => (
+                    <td key={m.groupKey} className="border px-3 py-2 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <Zap className={`w-3 h-3 ${
+                          m.kexStrengthInterpretation === 'strong'
+                            ? 'text-green-600'
+                            : m.kexStrengthInterpretation === 'moderate'
+                              ? 'text-yellow-600'
+                              : m.kexStrengthInterpretation === 'weak'
+                                ? 'text-orange-600'
+                                : 'text-gray-400'
+                        }`} />
+                        <span className="font-mono text-xs">
+                          {(m.kexStrength * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    </td>
+                  ))}
+                  <td className="border px-3 py-2 text-center font-semibold text-green-600">
+                    {comparisonData.mutants.reduce((best, curr) =>
+                      curr.kexStrength > best.kexStrength ? curr : best
+                    ).name}
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
+
+          {/* Pairwise Statistical Comparison */}
+          {pairwiseComparisons.length > 0 && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <h4 className="font-medium mb-3 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4" />
+                Pairwise Statistical Comparison (Total Binding)
+              </h4>
+              <div className="space-y-2">
+                {pairwiseComparisons.map((comp, idx) => (
+                  <div
+                    key={idx}
+                    className={`flex items-center justify-between p-2 rounded ${
+                      comp.significant ? 'bg-green-50' : 'bg-gray-50'
+                    }`}
+                  >
+                    <span className="font-medium">
+                      {comp.mutantA} vs {comp.mutantB}
+                    </span>
+                    <div className="flex items-center gap-4 text-sm">
+                      <span className="font-mono">
+                        p = {comp.pValue < 0.001 ? '<0.001' : comp.pValue.toFixed(3)}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded text-xs ${
+                        comp.significant
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {comp.significant ? 'Significant' : 'Not Significant'}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded text-xs ${
+                        comp.effectInterpretation === 'large'
+                          ? 'bg-purple-100 text-purple-800'
+                          : comp.effectInterpretation === 'medium'
+                            ? 'bg-blue-100 text-blue-800'
+                            : comp.effectInterpretation === 'small'
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {comp.effectInterpretation} effect
+                      </span>
+                      {comp.significant && comp.winner && (
+                        <span className="text-green-600 font-semibold">
+                          → {comp.winner} higher
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Statistical tests: Welch&apos;s t-test (parametric) / Mann-Whitney U (non-parametric). Effect size: Cohen&apos;s d.
+              </p>
+            </div>
+          )}
 
           {/* Selectivity Bar Chart Comparison */}
           <div>
