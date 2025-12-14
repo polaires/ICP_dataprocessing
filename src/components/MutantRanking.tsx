@@ -78,8 +78,11 @@ interface MutantAnalysis {
   dataQuality: DataQualityAssessment;
   selectivityProfile: Record<string, { mean: number; error: number }>;
   rawReplicateData: Array<{
+    sampleId: string;
     sampleName: string;
     isOutlier: boolean;
+    isManuallyExcluded: boolean;
+    isIncluded: boolean;
     values: Record<string, number>;
     totalMolarity: number;
   }>;
@@ -115,6 +118,21 @@ export function MutantRanking() {
   const [showOutliers, setShowOutliers] = useState(false);
   const [selectedMutant, setSelectedMutant] = useState<string | null>(null);
   const [comparingMutants, setComparingMutants] = useState<string[]>([]);
+  // Manually excluded samples (by sample ID)
+  const [manuallyExcluded, setManuallyExcluded] = useState<Set<string>>(new Set());
+
+  // Toggle manual exclusion of a sample
+  const toggleSampleExclusion = (sampleId: string) => {
+    setManuallyExcluded(prev => {
+      const next = new Set(prev);
+      if (next.has(sampleId)) {
+        next.delete(sampleId);
+      } else {
+        next.add(sampleId);
+      }
+      return next;
+    });
+  };
 
   // Get elements with k_ex data
   const elementsWithKex = useMemo(() => {
@@ -148,10 +166,14 @@ export function MutantRanking() {
       const outlierResult = combinedOutlierDetection(totalMolarities, 2);
       const outlierSet = new Set(outlierResult.outlierIndices);
 
-      // Determine which samples to use
-      const validMeasurements = showOutliers
-        ? selectedMeasurements
-        : selectedMeasurements.filter((_, i) => !outlierSet.has(i));
+      // Determine which samples to use (considering both auto-detected outliers and manual exclusions)
+      const validMeasurements = selectedMeasurements.filter((m, i) => {
+        // Always exclude manually excluded samples
+        if (manuallyExcluded.has(m.id)) return false;
+        // Include auto-detected outliers only if showOutliers is true
+        if (outlierSet.has(i) && !showOutliers) return false;
+        return true;
+      });
 
       const outlierSamples = selectedMeasurements
         .filter((_, i) => outlierSet.has(i))
@@ -222,8 +244,11 @@ export function MutantRanking() {
 
       // Raw replicate data for detail view
       const rawReplicateData = selectedMeasurements.map((m, i) => ({
+        sampleId: m.id,
         sampleName: m.displayName,
         isOutlier: outlierSet.has(i),
+        isManuallyExcluded: manuallyExcluded.has(m.id),
+        isIncluded: !manuallyExcluded.has(m.id) && (showOutliers || !outlierSet.has(i)),
         values: Object.fromEntries(
           elementsWithKex.map(e => [e, m.selectivity[e] ?? 0])
         ),
@@ -313,6 +338,7 @@ export function MutantRanking() {
     selectedSamples,
     bufferMeasurement,
     showOutliers,
+    manuallyExcluded,
   ]);
 
   // Sort analyses
@@ -409,6 +435,8 @@ export function MutantRanking() {
       name: rep.sampleName.replace(analysis.name, '').replace(/^[-_]/, '') || rep.sampleName,
       value: rep.totalMolarity,
       isOutlier: rep.isOutlier,
+      isManuallyExcluded: rep.isManuallyExcluded,
+      isIncluded: rep.isIncluded,
     }));
   }, [selectedMutant, mutantAnalyses]);
 
@@ -543,12 +571,21 @@ export function MutantRanking() {
                 Clear Comparison ({comparingMutants.length})
               </button>
             )}
+
+            {manuallyExcluded.size > 0 && (
+              <button
+                onClick={() => setManuallyExcluded(new Set())}
+                className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+              >
+                Clear Manual Exclusions ({manuallyExcluded.size})
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-white border rounded-lg p-4">
           <div className="text-2xl font-bold text-blue-600">{mutantAnalyses.length}</div>
           <div className="text-sm text-gray-600">Total Mutants</div>
@@ -567,7 +604,11 @@ export function MutantRanking() {
           <div className="text-2xl font-bold text-orange-600">
             {mutantAnalyses.filter(m => m.outlierSamples.length > 0).length}
           </div>
-          <div className="text-sm text-gray-600">Groups with Outliers</div>
+          <div className="text-sm text-gray-600">Groups with Auto-Outliers</div>
+        </div>
+        <div className="bg-white border rounded-lg p-4">
+          <div className="text-2xl font-bold text-gray-600">{manuallyExcluded.size}</div>
+          <div className="text-sm text-gray-600">Manually Excluded</div>
         </div>
       </div>
 
@@ -1161,8 +1202,8 @@ export function MutantRanking() {
                       {boxPlotData.map((entry, index) => (
                         <Cell
                           key={`cell-${index}`}
-                          fill={entry.isOutlier ? '#ef4444' : '#3b82f6'}
-                          opacity={entry.isOutlier ? 0.6 : 1}
+                          fill={entry.isManuallyExcluded ? '#9ca3af' : entry.isOutlier ? '#ef4444' : '#3b82f6'}
+                          opacity={entry.isManuallyExcluded ? 0.4 : entry.isOutlier ? 0.6 : 1}
                         />
                       ))}
                     </Bar>
@@ -1177,10 +1218,13 @@ export function MutantRanking() {
               </div>
               <div className="flex gap-4 text-xs text-gray-500 mt-2">
                 <span className="flex items-center gap-1">
-                  <span className="w-3 h-3 bg-blue-500 rounded-sm" /> Valid
+                  <span className="w-3 h-3 bg-blue-500 rounded-sm" /> Included
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="w-3 h-3 bg-red-500 opacity-60 rounded-sm" /> Outlier
+                  <span className="w-3 h-3 bg-red-500 opacity-60 rounded-sm" /> Auto-Outlier
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-3 bg-gray-400 opacity-40 rounded-sm" /> Manually Excluded
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-6 h-0.5 bg-green-500" style={{ borderStyle: 'dashed' }} /> Mean
@@ -1191,13 +1235,20 @@ export function MutantRanking() {
 
           {/* Replicate Details */}
           <div>
-            <h4 className="font-medium mb-2">Replicate Samples</h4>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-medium">Replicate Samples</h4>
+              <div className="text-xs text-gray-500">
+                Click checkbox to manually include/exclude samples
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="bg-gray-100">
+                    <th className="border px-2 py-1 text-center w-16">Include</th>
                     <th className="border px-2 py-1 text-left">Sample</th>
                     <th className="border px-2 py-1 text-center">Status</th>
+                    <th className="border px-2 py-1 text-center">Total µM</th>
                     {elementsWithKex.map(e => (
                       <th key={e} className="border px-2 py-1 text-center text-xs">
                         {e}
@@ -1208,18 +1259,38 @@ export function MutantRanking() {
                 <tbody>
                   {selectedAnalysis.rawReplicateData.map(rep => (
                     <tr
-                      key={rep.sampleName}
-                      className={rep.isOutlier ? 'bg-red-50' : 'hover:bg-blue-50'}
+                      key={rep.sampleId}
+                      className={`
+                        ${rep.isManuallyExcluded ? 'bg-gray-100 text-gray-400 line-through' : ''}
+                        ${!rep.isManuallyExcluded && rep.isOutlier ? 'bg-red-50' : ''}
+                        ${rep.isIncluded ? 'hover:bg-blue-50' : ''}
+                      `}
                     >
+                      <td className="border px-2 py-1 text-center">
+                        <input
+                          type="checkbox"
+                          checked={!rep.isManuallyExcluded}
+                          onChange={() => toggleSampleExclusion(rep.sampleId)}
+                          className="rounded cursor-pointer"
+                          title={rep.isManuallyExcluded ? 'Click to include' : 'Click to exclude'}
+                        />
+                      </td>
                       <td className="border px-2 py-1 font-medium">{rep.sampleName}</td>
                       <td className="border px-2 py-1 text-center">
-                        {rep.isOutlier ? (
+                        {rep.isManuallyExcluded ? (
+                          <span className="px-1.5 py-0.5 bg-gray-200 text-gray-600 text-xs rounded">
+                            Excluded
+                          </span>
+                        ) : rep.isOutlier ? (
                           <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded">
-                            Outlier
+                            Auto-Outlier
                           </span>
                         ) : (
                           <CheckCircle className="w-4 h-4 text-green-500 mx-auto" />
                         )}
+                      </td>
+                      <td className="border px-2 py-1 text-center font-mono text-xs">
+                        {rep.totalMolarity.toFixed(2)}
                       </td>
                       {elementsWithKex.map(e => (
                         <td key={e} className="border px-2 py-1 text-center font-mono text-xs">
@@ -1230,8 +1301,19 @@ export function MutantRanking() {
                   ))}
                   {/* Mean row */}
                   <tr className="bg-blue-50 font-semibold">
-                    <td className="border px-2 py-1">Mean</td>
+                    <td className="border px-2 py-1 text-center">
+                      <span className="text-xs text-gray-500">
+                        {selectedAnalysis.rawReplicateData.filter(r => r.isIncluded).length}/{selectedAnalysis.rawReplicateData.length}
+                      </span>
+                    </td>
+                    <td className="border px-2 py-1">Mean (included)</td>
                     <td className="border px-2 py-1 text-center">-</td>
+                    <td className="border px-2 py-1 text-center font-mono text-xs">
+                      {selectedAnalysis.totalMolarity.toFixed(2)}
+                      <span className="text-gray-400 ml-1">
+                        ±{selectedAnalysis.totalMolarityError.toFixed(2)}
+                      </span>
+                    </td>
                     {elementsWithKex.map(e => (
                       <td key={e} className="border px-2 py-1 text-center font-mono text-xs">
                         {selectedAnalysis.selectivityProfile[e]?.mean.toFixed(1)}%
