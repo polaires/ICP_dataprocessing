@@ -96,7 +96,7 @@ interface MutantAnalysis {
   heavyRegression: LinearRegressionResult | null;
 }
 
-type SortField = 'name' | 'kexSlope' | 'kexR2' | 'topSelectivity' | 'avgCV' | 'totalMolarity' | 'nReplicates' | 'entropy' | 'lightHeavyScore' | 'kexStrength';
+type SortField = 'name' | 'kexSlope' | 'kexR2' | 'topSelectivity' | 'avgCV' | 'totalMolarity' | 'nReplicates' | 'entropy' | 'lightHeavyScore' | 'kexStrength' | 'lightSlope' | 'heavySlope' | 'lightHeavyOffset';
 type SortDirection = 'asc' | 'desc';
 
 const BINDING_THRESHOLD = 0.5; // µM
@@ -352,6 +352,15 @@ export function MutantRanking() {
           break;
         case 'kexStrength':
           comparison = b.kexStrength - a.kexStrength;
+          break;
+        case 'lightSlope':
+          comparison = Math.abs(b.lightRegression?.slope ?? 0) - Math.abs(a.lightRegression?.slope ?? 0);
+          break;
+        case 'heavySlope':
+          comparison = Math.abs(b.heavyRegression?.slope ?? 0) - Math.abs(a.heavyRegression?.slope ?? 0);
+          break;
+        case 'lightHeavyOffset':
+          comparison = Math.abs(b.lightHeavyOffset.offset) - Math.abs(a.lightHeavyOffset.offset);
           break;
       }
 
@@ -685,6 +694,36 @@ export function MutantRanking() {
                     <ArrowUpDown className="w-3 h-3" />
                   </div>
                 </th>
+                <th
+                  className="px-3 py-2 text-center cursor-pointer hover:bg-gray-200"
+                  onClick={() => handleSort('lightSlope')}
+                  title="Slope of selectivity vs k_ex for light REE (La-Eu)"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    Light Slope
+                    <ArrowUpDown className="w-3 h-3" />
+                  </div>
+                </th>
+                <th
+                  className="px-3 py-2 text-center cursor-pointer hover:bg-gray-200"
+                  onClick={() => handleSort('heavySlope')}
+                  title="Slope of selectivity vs k_ex for heavy REE (Gd-Lu)"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    Heavy Slope
+                    <ArrowUpDown className="w-3 h-3" />
+                  </div>
+                </th>
+                <th
+                  className="px-3 py-2 text-center cursor-pointer hover:bg-gray-200"
+                  onClick={() => handleSort('lightHeavyOffset')}
+                  title="Vertical offset between light and heavy regression lines (% selectivity)"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    L/H Offset
+                    <ArrowUpDown className="w-3 h-3" />
+                  </div>
+                </th>
                 <th className="px-3 py-2 text-center">Actions</th>
               </tr>
             </thead>
@@ -852,6 +891,53 @@ export function MutantRanking() {
                     )}
                   </td>
                   <td className="px-3 py-2 text-center">
+                    {analysis.isBinding && analysis.lightRegression ? (
+                      <span
+                        className={`font-mono text-xs ${
+                          analysis.lightRegression.slope > 0 ? 'text-green-600' : 'text-red-600'
+                        }`}
+                        title={`R²=${analysis.lightRegression.rSquared.toFixed(2)}`}
+                      >
+                        {analysis.lightRegression.slope > 0 ? '+' : ''}
+                        {analysis.lightRegression.slope.toFixed(3)}
+                      </span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {analysis.isBinding && analysis.heavyRegression ? (
+                      <span
+                        className={`font-mono text-xs ${
+                          analysis.heavyRegression.slope > 0 ? 'text-green-600' : 'text-red-600'
+                        }`}
+                        title={`R²=${analysis.heavyRegression.rSquared.toFixed(2)}`}
+                      >
+                        {analysis.heavyRegression.slope > 0 ? '+' : ''}
+                        {analysis.heavyRegression.slope.toFixed(3)}
+                      </span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {analysis.isBinding && analysis.lightHeavyOffset.isSignificant ? (
+                      <span
+                        className={`font-mono text-xs font-semibold ${
+                          analysis.lightHeavyOffset.offset > 0 ? 'text-purple-600' : 'text-orange-600'
+                        }`}
+                        title={analysis.lightHeavyOffset.interpretation}
+                      >
+                        {analysis.lightHeavyOffset.offset > 0 ? '+' : ''}
+                        {analysis.lightHeavyOffset.offset.toFixed(1)}%
+                      </span>
+                    ) : analysis.isBinding ? (
+                      <span className="text-gray-400 text-xs">~0</span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
                     <button
                       onClick={() =>
                         setSelectedMutant(selectedMutant === analysis.groupKey ? null : analysis.groupKey)
@@ -1004,6 +1090,52 @@ export function MutantRanking() {
                   <div className="text-sm text-gray-500">
                     {selectedAnalysis.lightHeavyOffset.interpretation}
                   </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Light/Heavy Slope Details */}
+          {selectedAnalysis.isBinding && (selectedAnalysis.lightRegression || selectedAnalysis.heavyRegression) && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-orange-50 rounded-lg p-3">
+                <div className="text-xs text-orange-600 mb-1 font-medium">Light REE Slope (La-Eu)</div>
+                {selectedAnalysis.lightRegression ? (
+                  <>
+                    <div className={`text-xl font-bold ${
+                      selectedAnalysis.lightRegression.slope > 0 ? 'text-green-600' : 'text-red-600'
+                    }`}>
+                      {selectedAnalysis.lightRegression.slope > 0 ? '+' : ''}
+                      {selectedAnalysis.lightRegression.slope.toFixed(4)}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1 space-y-0.5">
+                      <div>R² = {selectedAnalysis.lightRegression.rSquared.toFixed(3)}</div>
+                      <div>SE = ±{selectedAnalysis.lightRegression.standardError.toFixed(4)}</div>
+                      <div>p = {selectedAnalysis.lightRegression.pValue < 0.001 ? '<0.001' : selectedAnalysis.lightRegression.pValue.toFixed(3)}</div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-gray-500">Insufficient data</div>
+                )}
+              </div>
+              <div className="bg-purple-50 rounded-lg p-3">
+                <div className="text-xs text-purple-600 mb-1 font-medium">Heavy REE Slope (Gd-Lu)</div>
+                {selectedAnalysis.heavyRegression ? (
+                  <>
+                    <div className={`text-xl font-bold ${
+                      selectedAnalysis.heavyRegression.slope > 0 ? 'text-green-600' : 'text-red-600'
+                    }`}>
+                      {selectedAnalysis.heavyRegression.slope > 0 ? '+' : ''}
+                      {selectedAnalysis.heavyRegression.slope.toFixed(4)}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1 space-y-0.5">
+                      <div>R² = {selectedAnalysis.heavyRegression.rSquared.toFixed(3)}</div>
+                      <div>SE = ±{selectedAnalysis.heavyRegression.standardError.toFixed(4)}</div>
+                      <div>p = {selectedAnalysis.heavyRegression.pValue < 0.001 ? '<0.001' : selectedAnalysis.heavyRegression.pValue.toFixed(3)}</div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-gray-500">Insufficient data</div>
                 )}
               </div>
             </div>
@@ -1367,6 +1499,79 @@ export function MutantRanking() {
                   <td className="border px-3 py-2 text-center font-semibold text-green-600">
                     {comparisonData.mutants.reduce((best, curr) =>
                       curr.kexStrength > best.kexStrength ? curr : best
+                    ).name}
+                  </td>
+                </tr>
+                <tr className="bg-purple-50">
+                  <td className="border px-3 py-2 font-medium">Light REE Slope</td>
+                  {comparisonData.mutants.map(m => (
+                    <td key={m.groupKey} className="border px-3 py-2 text-center font-mono">
+                      {m.lightRegression ? (
+                        <span className={m.lightRegression.slope > 0 ? 'text-green-600' : 'text-red-600'}>
+                          {m.lightRegression.slope > 0 ? '+' : ''}
+                          {m.lightRegression.slope.toFixed(3)}
+                        </span>
+                      ) : '-'}
+                    </td>
+                  ))}
+                  <td className="border px-3 py-2 text-center font-semibold text-green-600">
+                    {comparisonData.mutants.filter(m => m.lightRegression).length > 0
+                      ? comparisonData.mutants
+                          .filter(m => m.lightRegression)
+                          .reduce((best, curr) =>
+                            Math.abs(curr.lightRegression?.slope ?? 0) > Math.abs(best.lightRegression?.slope ?? 0)
+                              ? curr
+                              : best
+                          ).name
+                      : '-'}
+                  </td>
+                </tr>
+                <tr className="bg-purple-50">
+                  <td className="border px-3 py-2 font-medium">Heavy REE Slope</td>
+                  {comparisonData.mutants.map(m => (
+                    <td key={m.groupKey} className="border px-3 py-2 text-center font-mono">
+                      {m.heavyRegression ? (
+                        <span className={m.heavyRegression.slope > 0 ? 'text-green-600' : 'text-red-600'}>
+                          {m.heavyRegression.slope > 0 ? '+' : ''}
+                          {m.heavyRegression.slope.toFixed(3)}
+                        </span>
+                      ) : '-'}
+                    </td>
+                  ))}
+                  <td className="border px-3 py-2 text-center font-semibold text-green-600">
+                    {comparisonData.mutants.filter(m => m.heavyRegression).length > 0
+                      ? comparisonData.mutants
+                          .filter(m => m.heavyRegression)
+                          .reduce((best, curr) =>
+                            Math.abs(curr.heavyRegression?.slope ?? 0) > Math.abs(best.heavyRegression?.slope ?? 0)
+                              ? curr
+                              : best
+                          ).name
+                      : '-'}
+                  </td>
+                </tr>
+                <tr className="bg-purple-50">
+                  <td className="border px-3 py-2 font-medium">L/H Offset (%)</td>
+                  {comparisonData.mutants.map(m => (
+                    <td key={m.groupKey} className="border px-3 py-2 text-center font-mono">
+                      <span className={
+                        m.lightHeavyOffset.isSignificant
+                          ? m.lightHeavyOffset.offset > 0
+                            ? 'text-purple-600 font-semibold'
+                            : 'text-orange-600 font-semibold'
+                          : 'text-gray-400'
+                      }>
+                        {m.lightHeavyOffset.isSignificant
+                          ? `${m.lightHeavyOffset.offset > 0 ? '+' : ''}${m.lightHeavyOffset.offset.toFixed(1)}`
+                          : '~0'}
+                      </span>
+                    </td>
+                  ))}
+                  <td className="border px-3 py-2 text-center font-semibold text-green-600">
+                    {comparisonData.mutants.reduce((best, curr) =>
+                      Math.abs(curr.lightHeavyOffset.offset) > Math.abs(best.lightHeavyOffset.offset)
+                        ? curr
+                        : best
                     ).name}
                   </td>
                 </tr>
