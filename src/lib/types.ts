@@ -10,6 +10,7 @@ export interface RawMeasurement {
   displayName: string;
   type: string;
   values: Record<string, number>; // element -> mg/L value
+  batchId?: number; // For multi-batch CSV files
 }
 
 // Processed measurement with molarity
