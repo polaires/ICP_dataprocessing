@@ -823,6 +823,36 @@ export function PublicationView() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
+
+            {/* Total Binding Capacity - only show in concentration mode */}
+            {metricType === 'concentration' && (
+              <div className="bg-white border rounded-lg p-4">
+                <h3 className="font-semibold mb-2">Total Binding Capacity - {selectedCondition}</h3>
+                <p className="text-xs text-gray-500 mb-3">
+                  Sum of all lanthanide concentrations (binding capacity indicator)
+                </p>
+                <ResponsiveContainer width="100%" height={250}>
+                  <BarChart
+                    data={displayMutants.map((m, i) => ({
+                      name: m.baseName,
+                      total: m.totalConcentration,
+                      color: getMutantColor(m.baseName, i),
+                    }))}
+                    margin={{ top: 20, right: 20, bottom: 40, left: 40 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                    <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} tick={{ fontSize: 11 }} />
+                    <YAxis label={{ value: 'Total Conc. (µM)', angle: -90, position: 'insideLeft' }} />
+                    <Tooltip formatter={(v: number) => `${v.toFixed(2)} µM`} />
+                    <Bar dataKey="total" name="Total Binding">
+                      {displayMutants.map((m, i) => (
+                        <Cell key={m.name} fill={getMutantColor(m.baseName, i)} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
 
           {/* Profile - Line Overlay */}
@@ -1021,6 +1051,29 @@ export function PublicationView() {
                   <Tooltip />
                   <Legend />
                   <ReferenceLine y={0} stroke="#666" strokeDasharray="3 3" />
+                  <Bar dataKey="h2o" name="H2O" fill="#0ea5e9" />
+                  <Bar dataKey="atc" name="ATC" fill="#f59e0b" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Total Binding Capacity Comparison */}
+            <div>
+              <h4 className="text-sm font-medium mb-2">Total Binding Capacity (µM)</h4>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart
+                  data={pairedMutantData.map(p => ({
+                    name: p.baseName,
+                    h2o: p.h2o?.totalConcentration ?? 0,
+                    atc: p.atc?.totalConcentration ?? 0,
+                  }))}
+                  margin={{ top: 20, right: 30, bottom: 40, left: 60 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                  <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} tick={{ fontSize: 11 }} />
+                  <YAxis label={{ value: 'Total Conc. (µM)', angle: -90, position: 'insideLeft' }} />
+                  <Tooltip formatter={(v: number) => `${v.toFixed(2)} µM`} />
+                  <Legend />
                   <Bar dataKey="h2o" name="H2O" fill="#0ea5e9" />
                   <Bar dataKey="atc" name="ATC" fill="#f59e0b" />
                 </BarChart>
