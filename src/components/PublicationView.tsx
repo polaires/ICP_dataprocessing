@@ -55,19 +55,31 @@ interface MutantData {
   condition: 'H2O' | 'ATC' | 'unknown';
   selectivityProfile: Record<string, number>;
   selectivityError: Record<string, number>;
+  concentrationProfile: Record<string, number>;
+  concentrationError: Record<string, number>;
   kexSlope: number;
   kexSlopeError: number;
   kexR2: number;
   kexPValue: number;
   kexIntercept: number;
+  kexSlopeConc: number;
+  kexSlopeErrorConc: number;
+  kexR2Conc: number;
+  kexPValueConc: number;
+  kexInterceptConc: number;
   entropy: number;
   normalizedEntropy: number;
   lightHeavyScore: number;
   topElement: string;
   topSelectivity: number;
+  topConcentration: number;
+  totalConcentration: number;
   isBinding: boolean;
   nReplicates: number;
 }
+
+type SortColumn = 'name' | 'nReplicates' | 'kexSlope' | 'kexR2' | 'kexPValue' | 'topElement' | 'topValue' | 'lightHeavyScore' | 'totalConc';
+type SortDirection = 'asc' | 'desc';
 
 // Color palette optimized for publication (colorblind-friendly)
 const BASE_MUTANT_COLORS: Record<string, string> = {
@@ -115,6 +127,9 @@ export function PublicationView() {
   const [comparisonMode, setComparisonMode] = useState<'cross-mutant' | 'within-mutant'>('cross-mutant');
   const [selectedCondition, setSelectedCondition] = useState<'H2O' | 'ATC'>('H2O');
   const [selectedBaseMutants, setSelectedBaseMutants] = useState<Set<string>>(new Set());
+  const [metricType, setMetricType] = useState<'selectivity' | 'concentration'>('selectivity');
+  const [sortColumn, setSortColumn] = useState<SortColumn>('name');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
   // Get elements with k_ex data
   const elementsWithKex = useMemo(() => {
@@ -169,7 +184,17 @@ export function PublicationView() {
         selectivityError[element] = se;
       }
 
-      // k_ex regression
+      // Calculate mean concentration profile with errors
+      const concentrationProfile: Record<string, number> = {};
+      const concentrationError: Record<string, number> = {};
+      for (const element of elementsWithKex) {
+        const values = validMeasurements.map(m => m.normalizedMolarity[element] ?? 0);
+        const { mean, se } = meanAndSE(values);
+        concentrationProfile[element] = mean;
+        concentrationError[element] = se;
+      }
+
+      // k_ex regression for selectivity
       const kexValues = elementsWithKex.map(e => WATER_EXCHANGE_RATES[e]!);
       const bindingValues = elementsWithKex.map(e => selectivityProfile[e]);
 
@@ -184,8 +209,27 @@ export function PublicationView() {
         kexIntercept = regression.intercept;
       }
 
-      // Top element
+      // k_ex regression for concentration
+      const concValues = elementsWithKex.map(e => concentrationProfile[e]);
+      let kexSlopeConc = 0, kexSlopeErrorConc = 0, kexR2Conc = 0, kexPValueConc = 1, kexInterceptConc = 0;
+
+      if (isBinding && concValues.some(v => v > 0)) {
+        const regressionConc = linearRegression(kexValues, concValues);
+        kexSlopeConc = regressionConc.slope;
+        kexSlopeErrorConc = regressionConc.standardError;
+        kexR2Conc = regressionConc.rSquared;
+        kexPValueConc = regressionConc.pValue;
+        kexInterceptConc = regressionConc.intercept;
+      }
+
+      // Top element for selectivity
       const topEntry = Object.entries(selectivityProfile).reduce(
+        (max, curr) => (curr[1] > max[1] ? curr : max),
+        ['', 0]
+      );
+
+      // Top element for concentration
+      const topConcEntry = Object.entries(concentrationProfile).reduce(
         (max, curr) => (curr[1] > max[1] ? curr : max),
         ['', 0]
       );
@@ -207,16 +251,25 @@ export function PublicationView() {
         condition,
         selectivityProfile,
         selectivityError,
+        concentrationProfile,
+        concentrationError,
         kexSlope,
         kexSlopeError,
         kexR2,
         kexPValue,
         kexIntercept,
+        kexSlopeConc,
+        kexSlopeErrorConc,
+        kexR2Conc,
+        kexPValueConc,
+        kexInterceptConc,
         entropy: entropyResult.entropy,
         normalizedEntropy: entropyResult.normalizedEntropy,
         lightHeavyScore: lhResult.score,
         topElement: topEntry[0],
         topSelectivity: topEntry[1],
+        topConcentration: topConcEntry[1],
+        totalConcentration: totalMolarity,
         isBinding,
         nReplicates: validMeasurements.length,
       });
@@ -307,6 +360,78 @@ export function PublicationView() {
     });
   };
 
+  // Sort handler
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
+  // Get sorted mutants for display
+  const getSortedMutants = (mutants: MutantData[]) => {
+    return [...mutants].sort((a, b) => {
+      let comparison = 0;
+      const slope = metricType === 'selectivity' ? 'kexSlope' : 'kexSlopeConc';
+      const r2 = metricType === 'selectivity' ? 'kexR2' : 'kexR2Conc';
+      const pValue = metricType === 'selectivity' ? 'kexPValue' : 'kexPValueConc';
+
+      switch (sortColumn) {
+        case 'name':
+          comparison = a.baseName.localeCompare(b.baseName);
+          break;
+        case 'nReplicates':
+          comparison = a.nReplicates - b.nReplicates;
+          break;
+        case 'kexSlope':
+          comparison = (metricType === 'selectivity' ? a.kexSlope : a.kexSlopeConc) -
+                       (metricType === 'selectivity' ? b.kexSlope : b.kexSlopeConc);
+          break;
+        case 'kexR2':
+          comparison = (metricType === 'selectivity' ? a.kexR2 : a.kexR2Conc) -
+                       (metricType === 'selectivity' ? b.kexR2 : b.kexR2Conc);
+          break;
+        case 'kexPValue':
+          comparison = (metricType === 'selectivity' ? a.kexPValue : a.kexPValueConc) -
+                       (metricType === 'selectivity' ? b.kexPValue : b.kexPValueConc);
+          break;
+        case 'topElement':
+          comparison = a.topElement.localeCompare(b.topElement);
+          break;
+        case 'topValue':
+          comparison = (metricType === 'selectivity' ? a.topSelectivity : a.topConcentration) -
+                       (metricType === 'selectivity' ? b.topSelectivity : b.topConcentration);
+          break;
+        case 'lightHeavyScore':
+          comparison = a.lightHeavyScore - b.lightHeavyScore;
+          break;
+        case 'totalConc':
+          comparison = a.totalConcentration - b.totalConcentration;
+          break;
+        default:
+          comparison = 0;
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  };
+
+  // Sortable header component
+  const SortableHeader = ({ column, label, className = '' }: { column: SortColumn; label: string; className?: string }) => (
+    <th
+      className={`px-3 py-2 font-medium cursor-pointer hover:bg-gray-100 select-none ${className}`}
+      onClick={() => handleSort(column)}
+    >
+      <div className="flex items-center gap-1">
+        <span>{label}</span>
+        <span className="text-gray-400">
+          {sortColumn === column ? (sortDirection === 'asc' ? '▲' : '▼') : '○'}
+        </span>
+      </div>
+    </th>
+  );
+
   if (!rawData || allMutantData.length === 0) {
     return (
       <div className="p-4 text-center text-gray-500">
@@ -369,6 +494,32 @@ export function PublicationView() {
               </div>
             </div>
           )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Metric</label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setMetricType('selectivity')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  metricType === 'selectivity'
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Selectivity (%)
+              </button>
+              <button
+                onClick={() => setMetricType('concentration')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  metricType === 'concentration'
+                    ? 'bg-teal-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Concentration (µM)
+              </button>
+            </div>
+          </div>
 
           <div className="flex items-end">
             <label className="flex items-center gap-2 text-sm">
@@ -433,7 +584,7 @@ export function PublicationView() {
           {/* k_ex Correlation - Clean Version */}
           <div className="bg-white border rounded-lg p-4">
             <h3 className="font-semibold mb-2">
-              k_ex Correlation - {selectedCondition} Condition
+              k_ex Correlation - {selectedCondition} Condition ({metricType === 'selectivity' ? 'Selectivity' : 'Concentration'})
             </h3>
             <p className="text-sm text-gray-500 mb-4">
               Comparing {displayMutants.length} mutants under {selectedCondition} condition
@@ -449,7 +600,12 @@ export function PublicationView() {
                   tickFormatter={(v) => v.toFixed(1)}
                 />
                 <YAxis
-                  label={{ value: 'Selectivity (%)', angle: -90, position: 'insideLeft', offset: -10 }}
+                  label={{
+                    value: metricType === 'selectivity' ? 'Selectivity (%)' : 'Concentration (µM)',
+                    angle: -90,
+                    position: 'insideLeft',
+                    offset: -10
+                  }}
                   domain={[0, 'auto']}
                 />
                 <Tooltip
@@ -461,7 +617,8 @@ export function PublicationView() {
                       <div className="bg-white border rounded shadow-lg p-3 text-sm">
                         <p className="font-semibold" style={{ color: point.color }}>{point.mutant}</p>
                         <p style={{ color: ELEMENT_COLORS[point.element] }}>
-                          <strong>{point.element}</strong>: {point.selectivity?.toFixed(1)}%
+                          <strong>{point.element}</strong>: {point.value?.toFixed(metricType === 'selectivity' ? 1 : 2)}
+                          {metricType === 'selectivity' ? '%' : ' µM'}
                         </p>
                         <p className="text-gray-500">k_ex: {point.kex?.toFixed(2)}</p>
                       </div>
@@ -475,12 +632,14 @@ export function PublicationView() {
                   const color = getMutantColor(mutant.baseName, idx);
                   const minKex = 0.5;
                   const maxKex = 7.5;
+                  const intercept = metricType === 'selectivity' ? mutant.kexIntercept : mutant.kexInterceptConc;
+                  const slope = metricType === 'selectivity' ? mutant.kexSlope : mutant.kexSlopeConc;
+                  const r2 = metricType === 'selectivity' ? mutant.kexR2 : mutant.kexR2Conc;
                   const lineData = [
-                    { kex: minKex, y: Math.max(0, mutant.kexIntercept + mutant.kexSlope * minKex) },
-                    { kex: maxKex, y: Math.max(0, mutant.kexIntercept + mutant.kexSlope * maxKex) },
+                    { kex: minKex, y: Math.max(0, intercept + slope * minKex) },
+                    { kex: maxKex, y: Math.max(0, intercept + slope * maxKex) },
                   ];
 
-                  // Show regression line for all binding mutants (removed R² threshold)
                   return (
                     <Line
                       key={`line-${mutant.name}`}
@@ -490,7 +649,7 @@ export function PublicationView() {
                       strokeWidth={2}
                       strokeOpacity={0.7}
                       dot={false}
-                      name={`${mutant.baseName} (R²=${mutant.kexR2.toFixed(2)})`}
+                      name={`${mutant.baseName} (R²=${r2.toFixed(2)})`}
                       legendType="line"
                     />
                   );
@@ -499,9 +658,10 @@ export function PublicationView() {
                 {/* Scatter points - render second (on top) */}
                 {displayMutants.map((mutant, idx) => {
                   const color = getMutantColor(mutant.baseName, idx);
+                  const profile = metricType === 'selectivity' ? mutant.selectivityProfile : mutant.concentrationProfile;
                   const scatterData = elementsWithKex.map(e => ({
                     kex: WATER_EXCHANGE_RATES[e]!,
-                    selectivity: mutant.selectivityProfile[e],
+                    value: profile[e],
                     element: e,
                     mutant: mutant.baseName,
                     color,
@@ -511,7 +671,7 @@ export function PublicationView() {
                     <Scatter
                       key={`scatter-${mutant.name}`}
                       data={scatterData}
-                      dataKey="selectivity"
+                      dataKey="value"
                       fill={color}
                       name={mutant.baseName}
                       legendType="circle"
@@ -547,13 +707,15 @@ export function PublicationView() {
             {/* k_ex Slope */}
             <div className="bg-white border rounded-lg p-4">
               <h3 className="font-semibold mb-2">k_ex Slope - {selectedCondition}</h3>
-              <p className="text-xs text-gray-500 mb-3">Positive = prefers high k_ex elements (fast exchange)</p>
+              <p className="text-xs text-gray-500 mb-3">
+                Positive = prefers high k_ex elements (fast exchange) | Metric: {metricType === 'selectivity' ? 'Selectivity' : 'Concentration'}
+              </p>
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart
                   data={displayMutants.map((m, i) => ({
                     name: m.baseName,
-                    slope: m.kexSlope,
-                    error: m.kexSlopeError,
+                    slope: metricType === 'selectivity' ? m.kexSlope : m.kexSlopeConc,
+                    error: metricType === 'selectivity' ? m.kexSlopeError : m.kexSlopeErrorConc,
                     color: getMutantColor(m.baseName, i),
                   }))}
                   margin={{ top: 20, right: 20, bottom: 40, left: 40 }}
@@ -575,12 +737,14 @@ export function PublicationView() {
             {/* R² */}
             <div className="bg-white border rounded-lg p-4">
               <h3 className="font-semibold mb-2">R² (Correlation Strength) - {selectedCondition}</h3>
-              <p className="text-xs text-gray-500 mb-3">Higher = stronger k_ex-selectivity relationship</p>
+              <p className="text-xs text-gray-500 mb-3">
+                Higher = stronger k_ex-{metricType} relationship
+              </p>
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart
                   data={displayMutants.map((m, i) => ({
                     name: m.baseName,
-                    r2: m.kexR2,
+                    r2: metricType === 'selectivity' ? m.kexR2 : m.kexR2Conc,
                     color: getMutantColor(m.baseName, i),
                   }))}
                   margin={{ top: 20, right: 20, bottom: 40, left: 40 }}
@@ -625,15 +789,19 @@ export function PublicationView() {
               </ResponsiveContainer>
             </div>
 
-            {/* Top Selectivity */}
+            {/* Top Value */}
             <div className="bg-white border rounded-lg p-4">
-              <h3 className="font-semibold mb-2">Top Element Selectivity - {selectedCondition}</h3>
-              <p className="text-xs text-gray-500 mb-3">Maximum selectivity % for preferred element</p>
+              <h3 className="font-semibold mb-2">
+                Top Element {metricType === 'selectivity' ? 'Selectivity' : 'Concentration'} - {selectedCondition}
+              </h3>
+              <p className="text-xs text-gray-500 mb-3">
+                Maximum {metricType === 'selectivity' ? 'selectivity %' : 'concentration µM'} for preferred element
+              </p>
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart
                   data={displayMutants.map((m, i) => ({
                     name: m.baseName,
-                    selectivity: m.topSelectivity,
+                    value: metricType === 'selectivity' ? m.topSelectivity : m.topConcentration,
                     element: m.topElement,
                     color: getMutantColor(m.baseName, i),
                   }))}
@@ -641,9 +809,13 @@ export function PublicationView() {
                 >
                   <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                   <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} tick={{ fontSize: 11 }} />
-                  <YAxis label={{ value: 'Selectivity (%)', angle: -90, position: 'insideLeft' }} />
+                  <YAxis label={{
+                    value: metricType === 'selectivity' ? 'Selectivity (%)' : 'Concentration (µM)',
+                    angle: -90,
+                    position: 'insideLeft'
+                  }} />
                   <Tooltip />
-                  <Bar dataKey="selectivity">
+                  <Bar dataKey="value">
                     {displayMutants.map((m, i) => (
                       <Cell key={m.name} fill={getMutantColor(m.baseName, i)} />
                     ))}
@@ -653,15 +825,18 @@ export function PublicationView() {
             </div>
           </div>
 
-          {/* Selectivity Profile - Line Overlay */}
+          {/* Profile - Line Overlay */}
           <div className="bg-white border rounded-lg p-4">
-            <h3 className="font-semibold mb-2">Selectivity Profiles - {selectedCondition}</h3>
+            <h3 className="font-semibold mb-2">
+              {metricType === 'selectivity' ? 'Selectivity' : 'Concentration'} Profiles - {selectedCondition}
+            </h3>
             <ResponsiveContainer width="100%" height={350}>
               <ComposedChart
                 data={elementsWithKex.map(e => {
                   const point: Record<string, string | number> = { element: e };
+                  const profile = metricType === 'selectivity' ? 'selectivityProfile' : 'concentrationProfile';
                   displayMutants.forEach(m => {
-                    point[m.baseName] = m.selectivityProfile[e] ?? 0;
+                    point[m.baseName] = m[profile][e] ?? 0;
                   });
                   return point;
                 })}
@@ -669,7 +844,11 @@ export function PublicationView() {
               >
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                 <XAxis dataKey="element" />
-                <YAxis label={{ value: 'Selectivity (%)', angle: -90, position: 'insideLeft' }} />
+                <YAxis label={{
+                  value: metricType === 'selectivity' ? 'Selectivity (%)' : 'Concentration (µM)',
+                  angle: -90,
+                  position: 'insideLeft'
+                }} />
                 <Tooltip />
                 <Legend />
                 {displayMutants.map((m, i) => (
@@ -688,46 +867,72 @@ export function PublicationView() {
 
           {/* Summary Table */}
           <div className="bg-white border rounded-lg p-4">
-            <h3 className="font-semibold mb-4">Summary Statistics - {selectedCondition}</h3>
+            <h3 className="font-semibold mb-4">
+              Summary Statistics - {selectedCondition} ({metricType === 'selectivity' ? 'Selectivity' : 'Concentration'})
+            </h3>
+            <p className="text-xs text-gray-500 mb-3">Click column headers to sort</p>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="px-3 py-2 text-left font-medium">Mutant</th>
-                    <th className="px-3 py-2 text-right font-medium">n</th>
-                    <th className="px-3 py-2 text-right font-medium">k_ex Slope</th>
-                    <th className="px-3 py-2 text-right font-medium">R²</th>
-                    <th className="px-3 py-2 text-right font-medium">p-value</th>
-                    <th className="px-3 py-2 text-center font-medium">Top Element</th>
-                    <th className="px-3 py-2 text-right font-medium">Top %</th>
-                    <th className="px-3 py-2 text-right font-medium">L/H Score</th>
+                    <SortableHeader column="name" label="Mutant" className="text-left" />
+                    <SortableHeader column="nReplicates" label="n" className="text-right" />
+                    <SortableHeader column="kexSlope" label="k_ex Slope" className="text-right" />
+                    <SortableHeader column="kexR2" label="R²" className="text-right" />
+                    <SortableHeader column="kexPValue" label="p-value" className="text-right" />
+                    <SortableHeader column="topElement" label="Top Element" className="text-center" />
+                    <SortableHeader
+                      column="topValue"
+                      label={metricType === 'selectivity' ? 'Top %' : 'Top µM'}
+                      className="text-right"
+                    />
+                    <SortableHeader column="lightHeavyScore" label="L/H Score" className="text-right" />
+                    {metricType === 'concentration' && (
+                      <SortableHeader column="totalConc" label="Total µM" className="text-right" />
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {displayMutants.map((m, i) => (
-                    <tr key={m.name} className="border-t hover:bg-gray-50">
-                      <td className="px-3 py-2 font-medium" style={{ color: getMutantColor(m.baseName, i) }}>
-                        {m.baseName}
-                      </td>
-                      <td className="px-3 py-2 text-right">{m.nReplicates}</td>
-                      <td className="px-3 py-2 text-right font-mono">
-                        {m.kexSlope.toFixed(3)} ± {m.kexSlopeError.toFixed(3)}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono">{m.kexR2.toFixed(3)}</td>
-                      <td className="px-3 py-2 text-right font-mono">
-                        {m.kexPValue < 0.001 ? '<0.001' : m.kexPValue.toFixed(3)}
-                      </td>
-                      <td className="px-3 py-2 text-center font-medium" style={{ color: ELEMENT_COLORS[m.topElement] }}>
-                        {m.topElement}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono">{m.topSelectivity.toFixed(1)}%</td>
-                      <td className="px-3 py-2 text-right font-mono">
-                        <span className={m.lightHeavyScore > 0 ? 'text-green-600' : 'text-red-600'}>
-                          {m.lightHeavyScore > 0 ? '+' : ''}{m.lightHeavyScore.toFixed(1)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {getSortedMutants(displayMutants).map((m, i) => {
+                    const slope = metricType === 'selectivity' ? m.kexSlope : m.kexSlopeConc;
+                    const slopeError = metricType === 'selectivity' ? m.kexSlopeError : m.kexSlopeErrorConc;
+                    const r2 = metricType === 'selectivity' ? m.kexR2 : m.kexR2Conc;
+                    const pValue = metricType === 'selectivity' ? m.kexPValue : m.kexPValueConc;
+                    const topValue = metricType === 'selectivity' ? m.topSelectivity : m.topConcentration;
+
+                    return (
+                      <tr key={m.name} className="border-t hover:bg-gray-50">
+                        <td className="px-3 py-2 font-medium" style={{ color: getMutantColor(m.baseName, baseMutantNames.indexOf(m.baseName)) }}>
+                          {m.baseName}
+                        </td>
+                        <td className="px-3 py-2 text-right">{m.nReplicates}</td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          {slope.toFixed(3)} ± {slopeError.toFixed(3)}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">{r2.toFixed(3)}</td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          {pValue < 0.001 ? '<0.001' : pValue.toFixed(3)}
+                        </td>
+                        <td className="px-3 py-2 text-center font-medium" style={{ color: ELEMENT_COLORS[m.topElement] }}>
+                          {m.topElement}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          {topValue.toFixed(metricType === 'selectivity' ? 1 : 2)}
+                          {metricType === 'selectivity' ? '%' : ' µM'}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          <span className={m.lightHeavyScore > 0 ? 'text-green-600' : 'text-red-600'}>
+                            {m.lightHeavyScore > 0 ? '+' : ''}{m.lightHeavyScore.toFixed(1)}
+                          </span>
+                        </td>
+                        {metricType === 'concentration' && (
+                          <td className="px-3 py-2 text-right font-mono">
+                            {m.totalConcentration.toFixed(2)} µM
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -742,18 +947,20 @@ export function PublicationView() {
           <div className="bg-white border rounded-lg p-4">
             <h3 className="font-semibold mb-2">H2O vs ATC Condition Comparison</h3>
             <p className="text-sm text-gray-500 mb-4">
-              Comparing selectivity metrics between water and acetic acid conditions for each mutant
+              Comparing {metricType} metrics between water and acetic acid conditions for each mutant
             </p>
 
             {/* k_ex Slope Comparison */}
             <div className="mb-6">
-              <h4 className="text-sm font-medium mb-2">k_ex Slope: H2O (solid) vs ATC (striped)</h4>
+              <h4 className="text-sm font-medium mb-2">
+                k_ex Slope ({metricType === 'selectivity' ? 'Selectivity' : 'Concentration'}): H2O vs ATC
+              </h4>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={pairedMutantData.map(p => ({
                     name: p.baseName,
-                    h2o: p.h2o?.kexSlope ?? 0,
-                    atc: p.atc?.kexSlope ?? 0,
+                    h2o: metricType === 'selectivity' ? (p.h2o?.kexSlope ?? 0) : (p.h2o?.kexSlopeConc ?? 0),
+                    atc: metricType === 'selectivity' ? (p.atc?.kexSlope ?? 0) : (p.atc?.kexSlopeConc ?? 0),
                     color: p.color,
                   }))}
                   margin={{ top: 20, right: 30, bottom: 40, left: 60 }}
@@ -772,13 +979,15 @@ export function PublicationView() {
 
             {/* R² Comparison */}
             <div className="mb-6">
-              <h4 className="text-sm font-medium mb-2">R² (Correlation Strength)</h4>
+              <h4 className="text-sm font-medium mb-2">
+                R² (Correlation Strength) - {metricType === 'selectivity' ? 'Selectivity' : 'Concentration'}
+              </h4>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={pairedMutantData.map(p => ({
                     name: p.baseName,
-                    h2o: p.h2o?.kexR2 ?? 0,
-                    atc: p.atc?.kexR2 ?? 0,
+                    h2o: metricType === 'selectivity' ? (p.h2o?.kexR2 ?? 0) : (p.h2o?.kexR2Conc ?? 0),
+                    atc: metricType === 'selectivity' ? (p.atc?.kexR2 ?? 0) : (p.atc?.kexR2Conc ?? 0),
                     color: p.color,
                   }))}
                   margin={{ top: 20, right: 30, bottom: 40, left: 60 }}
@@ -821,7 +1030,9 @@ export function PublicationView() {
 
           {/* Detailed Paired Table */}
           <div className="bg-white border rounded-lg p-4">
-            <h3 className="font-semibold mb-4">Detailed Comparison Table</h3>
+            <h3 className="font-semibold mb-4">
+              Detailed Comparison Table ({metricType === 'selectivity' ? 'Selectivity' : 'Concentration'})
+            </h3>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
@@ -842,98 +1053,112 @@ export function PublicationView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pairedMutantData.map(p => (
-                    <tr key={p.baseName} className="border-t hover:bg-gray-50">
-                      <td className="px-3 py-2 font-medium" style={{ color: p.color }}>
-                        {p.baseName}
-                      </td>
-                      {/* H2O columns */}
-                      <td className="px-2 py-1 text-right font-mono bg-cyan-50/30">
-                        {p.h2o ? p.h2o.kexSlope.toFixed(2) : '-'}
-                      </td>
-                      <td className="px-2 py-1 text-right font-mono bg-cyan-50/30">
-                        {p.h2o ? p.h2o.kexR2.toFixed(2) : '-'}
-                      </td>
-                      <td className="px-2 py-1 text-center bg-cyan-50/30" style={{ color: p.h2o ? ELEMENT_COLORS[p.h2o.topElement] : undefined }}>
-                        {p.h2o ? p.h2o.topElement : '-'}
-                      </td>
-                      <td className="px-2 py-1 text-right font-mono bg-cyan-50/30">
-                        {p.h2o ? (
-                          <span className={p.h2o.lightHeavyScore > 0 ? 'text-green-600' : 'text-red-600'}>
-                            {p.h2o.lightHeavyScore > 0 ? '+' : ''}{p.h2o.lightHeavyScore.toFixed(0)}
-                          </span>
-                        ) : '-'}
-                      </td>
-                      {/* ATC columns */}
-                      <td className="px-2 py-1 text-right font-mono bg-amber-50/30">
-                        {p.atc ? p.atc.kexSlope.toFixed(2) : '-'}
-                      </td>
-                      <td className="px-2 py-1 text-right font-mono bg-amber-50/30">
-                        {p.atc ? p.atc.kexR2.toFixed(2) : '-'}
-                      </td>
-                      <td className="px-2 py-1 text-center bg-amber-50/30" style={{ color: p.atc ? ELEMENT_COLORS[p.atc.topElement] : undefined }}>
-                        {p.atc ? p.atc.topElement : '-'}
-                      </td>
-                      <td className="px-2 py-1 text-right font-mono bg-amber-50/30">
-                        {p.atc ? (
-                          <span className={p.atc.lightHeavyScore > 0 ? 'text-green-600' : 'text-red-600'}>
-                            {p.atc.lightHeavyScore > 0 ? '+' : ''}{p.atc.lightHeavyScore.toFixed(0)}
-                          </span>
-                        ) : '-'}
-                      </td>
-                    </tr>
-                  ))}
+                  {pairedMutantData.map(p => {
+                    const h2oSlope = metricType === 'selectivity' ? p.h2o?.kexSlope : p.h2o?.kexSlopeConc;
+                    const h2oR2 = metricType === 'selectivity' ? p.h2o?.kexR2 : p.h2o?.kexR2Conc;
+                    const atcSlope = metricType === 'selectivity' ? p.atc?.kexSlope : p.atc?.kexSlopeConc;
+                    const atcR2 = metricType === 'selectivity' ? p.atc?.kexR2 : p.atc?.kexR2Conc;
+
+                    return (
+                      <tr key={p.baseName} className="border-t hover:bg-gray-50">
+                        <td className="px-3 py-2 font-medium" style={{ color: p.color }}>
+                          {p.baseName}
+                        </td>
+                        {/* H2O columns */}
+                        <td className="px-2 py-1 text-right font-mono bg-cyan-50/30">
+                          {h2oSlope !== undefined ? h2oSlope.toFixed(2) : '-'}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono bg-cyan-50/30">
+                          {h2oR2 !== undefined ? h2oR2.toFixed(2) : '-'}
+                        </td>
+                        <td className="px-2 py-1 text-center bg-cyan-50/30" style={{ color: p.h2o ? ELEMENT_COLORS[p.h2o.topElement] : undefined }}>
+                          {p.h2o ? p.h2o.topElement : '-'}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono bg-cyan-50/30">
+                          {p.h2o ? (
+                            <span className={p.h2o.lightHeavyScore > 0 ? 'text-green-600' : 'text-red-600'}>
+                              {p.h2o.lightHeavyScore > 0 ? '+' : ''}{p.h2o.lightHeavyScore.toFixed(0)}
+                            </span>
+                          ) : '-'}
+                        </td>
+                        {/* ATC columns */}
+                        <td className="px-2 py-1 text-right font-mono bg-amber-50/30">
+                          {atcSlope !== undefined ? atcSlope.toFixed(2) : '-'}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono bg-amber-50/30">
+                          {atcR2 !== undefined ? atcR2.toFixed(2) : '-'}
+                        </td>
+                        <td className="px-2 py-1 text-center bg-amber-50/30" style={{ color: p.atc ? ELEMENT_COLORS[p.atc.topElement] : undefined }}>
+                          {p.atc ? p.atc.topElement : '-'}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono bg-amber-50/30">
+                          {p.atc ? (
+                            <span className={p.atc.lightHeavyScore > 0 ? 'text-green-600' : 'text-red-600'}>
+                              {p.atc.lightHeavyScore > 0 ? '+' : ''}{p.atc.lightHeavyScore.toFixed(0)}
+                            </span>
+                          ) : '-'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
 
-          {/* Small Multiples - Selectivity Profiles per Mutant */}
+          {/* Small Multiples - Profiles per Mutant */}
           <div className="bg-white border rounded-lg p-4">
-            <h3 className="font-semibold mb-4">Selectivity Profiles - H2O vs ATC per Mutant</h3>
+            <h3 className="font-semibold mb-4">
+              {metricType === 'selectivity' ? 'Selectivity' : 'Concentration'} Profiles - H2O vs ATC per Mutant
+            </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {pairedMutantData.filter(p => p.h2o || p.atc).map(p => (
-                <div key={p.baseName} className="border rounded p-3">
-                  <h4 className="font-medium text-sm mb-2" style={{ color: p.color }}>{p.baseName}</h4>
-                  <ResponsiveContainer width="100%" height={180}>
-                    <ComposedChart
-                      data={elementsWithKex.map(e => ({
-                        element: e,
-                        h2o: p.h2o?.selectivityProfile[e] ?? null,
-                        atc: p.atc?.selectivityProfile[e] ?? null,
-                      }))}
-                      margin={{ top: 10, right: 10, bottom: 30, left: 30 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                      <XAxis dataKey="element" tick={{ fontSize: 9 }} angle={-45} textAnchor="end" />
-                      <YAxis tick={{ fontSize: 9 }} />
-                      <Tooltip />
-                      {p.h2o && (
-                        <Line
-                          type="monotone"
-                          dataKey="h2o"
-                          stroke="#0ea5e9"
-                          strokeWidth={2}
-                          dot={{ r: 2 }}
-                          name="H2O"
-                          connectNulls
-                        />
-                      )}
-                      {p.atc && (
-                        <Line
-                          type="monotone"
-                          dataKey="atc"
-                          stroke="#f59e0b"
-                          strokeWidth={2}
-                          dot={{ r: 2 }}
-                          name="ATC"
-                          connectNulls
-                        />
-                      )}
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              ))}
+              {pairedMutantData.filter(p => p.h2o || p.atc).map(p => {
+                const h2oProfile = metricType === 'selectivity' ? p.h2o?.selectivityProfile : p.h2o?.concentrationProfile;
+                const atcProfile = metricType === 'selectivity' ? p.atc?.selectivityProfile : p.atc?.concentrationProfile;
+
+                return (
+                  <div key={p.baseName} className="border rounded p-3">
+                    <h4 className="font-medium text-sm mb-2" style={{ color: p.color }}>{p.baseName}</h4>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <ComposedChart
+                        data={elementsWithKex.map(e => ({
+                          element: e,
+                          h2o: h2oProfile?.[e] ?? null,
+                          atc: atcProfile?.[e] ?? null,
+                        }))}
+                        margin={{ top: 10, right: 10, bottom: 30, left: 30 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                        <XAxis dataKey="element" tick={{ fontSize: 9 }} angle={-45} textAnchor="end" />
+                        <YAxis tick={{ fontSize: 9 }} />
+                        <Tooltip />
+                        {p.h2o && (
+                          <Line
+                            type="monotone"
+                            dataKey="h2o"
+                            stroke="#0ea5e9"
+                            strokeWidth={2}
+                            dot={{ r: 2 }}
+                            name="H2O"
+                            connectNulls
+                          />
+                        )}
+                        {p.atc && (
+                          <Line
+                            type="monotone"
+                            dataKey="atc"
+                            stroke="#f59e0b"
+                            strokeWidth={2}
+                            dot={{ r: 2 }}
+                            name="ATC"
+                            connectNulls
+                          />
+                        )}
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </>
