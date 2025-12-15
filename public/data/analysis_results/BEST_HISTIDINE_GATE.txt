@@ -1,0 +1,24 @@
+================================================================================
+RECOMMENDED HISTIDINE GATE MUTATION
+================================================================================
+
+BEST MUTANT: Rub13
+BEST POSITION: GLU53
+CONFIDENCE: 0.042 ± 0.003
+
+MUTATION COMMAND:
+----------------------------------------
+sed -i 's/GLU A  53/HIS A  53/g' Rub13.pdb
+
+TOP 3 POSITIONS FOR TESTING:
+----------------------------------------
+1. GLU53H - Score: 0.042
+
+================================================================================
+EXPERIMENTAL PROTOCOL:
+================================================================================
+1. Create mutation: GLU53 → HIS
+2. Run 10 ns equilibration
+3. Test at pH 5 (HIS protonated) vs pH 8 (HIS neutral)
+4. Measure EU3P coordination number change
+5. Expected: CN drops from ~8 to ~4 at pH 5
