@@ -293,10 +293,81 @@ export function PCAAnalysis() {
     'Heavy Sum',
   ];
 
+  // Statistical helper functions
+  // Approximate t-distribution CDF using normal approximation for small df
+  const tDistCDF = (t: number, df: number): number => {
+    // Use normal approximation for t-distribution CDF
+    // More accurate approximation using the formula from Abramowitz and Stegun
+    const x = df / (df + t * t);
+    // Incomplete beta function approximation
+    const a = df / 2;
+    const b = 0.5;
+    // Simple approximation for two-tailed p-value
+    if (df <= 0) return 0.5;
+    const tAbs = Math.abs(t);
+    // Normal approximation for large df
+    if (df > 30) {
+      // Standard normal CDF approximation
+      const z = tAbs;
+      const p = 0.5 * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (z + 0.044715 * z * z * z)));
+      return 2 * (1 - p);
+    }
+    // For small df, use a rougher approximation
+    const p = Math.pow(1 + (tAbs * tAbs) / df, -(df + 1) / 2);
+    // Normalize to get approximate two-tailed p-value
+    return Math.min(1, p * Math.sqrt(df));
+  };
+
+  // Calculate p-value for Pearson correlation
+  const correlationPValue = (r: number, n: number): number => {
+    if (n <= 2) return 1;
+    if (Math.abs(r) >= 1) return 0;
+    const t = r * Math.sqrt((n - 2) / (1 - r * r));
+    return tDistCDF(t, n - 2);
+  };
+
+  // Fisher z-transformation for confidence intervals
+  const fisherZ = (r: number): number => {
+    // Clamp r to avoid infinity
+    const rClamped = Math.max(-0.9999, Math.min(0.9999, r));
+    return 0.5 * Math.log((1 + rClamped) / (1 - rClamped));
+  };
+
+  const inverseFisherZ = (z: number): number => {
+    return Math.tanh(z);
+  };
+
+  // Calculate 95% CI for correlation using Fisher transformation
+  const correlationCI = (r: number, n: number, alpha: number = 0.05): [number, number] => {
+    if (n <= 3) return [-1, 1];
+    const z = fisherZ(r);
+    const se = 1 / Math.sqrt(n - 3);
+    const zCrit = 1.96; // 95% CI (approximate)
+    const zLower = z - zCrit * se;
+    const zUpper = z + zCrit * se;
+    return [inverseFisherZ(zLower), inverseFisherZ(zUpper)];
+  };
+
+  // Correlation data type with statistics
+  interface CorrelationStat {
+    feature: string;
+    metric: string;
+    r: number;
+    pValue: number;
+    pValueAdj: number; // Bonferroni adjusted
+    ci95: [number, number];
+    significant: boolean; // p < 0.05
+    significantAdj: boolean; // Bonferroni adjusted p < 0.05
+    idx: [number, number];
+  }
+
   // Calculate correlations between GROMACS features and L/H metrics
   const gromacsLhCorrelations = useMemo(() => {
     const mutantsWithBoth = combinedData.filter(d => d.lhAnalysis);
     if (mutantsWithBoth.length < 3) return null;
+
+    const n = mutantsWithBoth.length;
+    const numTests = FEATURE_NAMES.length * LH_METRIC_NAMES.length;
 
     // Build data matrix: each row is a mutant, columns are [GROMACS features..., L/H metrics...]
     const gromacsFeatures = mutantsWithBoth.map(d => getFeatureVector(d.features));
@@ -311,7 +382,7 @@ export function PCAAnalysis() {
     ]);
 
     // Calculate Pearson correlation for each GROMACS feature vs each L/H metric
-    const correlations: { feature: string; metric: string; r: number; idx: [number, number] }[] = [];
+    const correlations: CorrelationStat[] = [];
 
     for (let i = 0; i < FEATURE_NAMES.length; i++) {
       const xVals = gromacsFeatures.map(gf => gf[i]);
@@ -324,7 +395,17 @@ export function PCAAnalysis() {
         const yStd = Math.sqrt(yVals.reduce((acc, v) => acc + (v - yMean) ** 2, 0) / yVals.length);
 
         if (xStd === 0 || yStd === 0) {
-          correlations.push({ feature: FEATURE_NAMES[i], metric: LH_METRIC_NAMES[j], r: 0, idx: [i, j] });
+          correlations.push({
+            feature: FEATURE_NAMES[i],
+            metric: LH_METRIC_NAMES[j],
+            r: 0,
+            pValue: 1,
+            pValueAdj: 1,
+            ci95: [-1, 1],
+            significant: false,
+            significantAdj: false,
+            idx: [i, j],
+          });
           continue;
         }
 
@@ -335,19 +416,39 @@ export function PCAAnalysis() {
         }
         covariance /= xVals.length;
         const r = covariance / (xStd * yStd);
-        correlations.push({ feature: FEATURE_NAMES[i], metric: LH_METRIC_NAMES[j], r, idx: [i, j] });
+
+        // Calculate statistics
+        const pValue = correlationPValue(r, n);
+        const pValueAdj = Math.min(1, pValue * numTests); // Bonferroni correction
+        const ci95 = correlationCI(r, n);
+
+        correlations.push({
+          feature: FEATURE_NAMES[i],
+          metric: LH_METRIC_NAMES[j],
+          r,
+          pValue,
+          pValueAdj,
+          ci95,
+          significant: pValue < 0.05,
+          significantAdj: pValueAdj < 0.05,
+          idx: [i, j],
+        });
       }
     }
 
     // Also build correlation matrix for heatmap
     const corrMatrix: number[][] = [];
+    const pValueMatrix: number[][] = [];
     for (let i = 0; i < FEATURE_NAMES.length; i++) {
       const row: number[] = [];
+      const pRow: number[] = [];
       for (let j = 0; j < LH_METRIC_NAMES.length; j++) {
         const corr = correlations.find(c => c.idx[0] === i && c.idx[1] === j);
         row.push(corr?.r ?? 0);
+        pRow.push(corr?.pValue ?? 1);
       }
       corrMatrix.push(row);
+      pValueMatrix.push(pRow);
     }
 
     // Find top correlations
@@ -355,14 +456,23 @@ export function PCAAnalysis() {
     const topPositive = sortedCorrelations.filter(c => c.r > 0).slice(0, 5);
     const topNegative = sortedCorrelations.filter(c => c.r < 0).slice(0, 5);
 
+    // Count significant correlations
+    const numSignificant = correlations.filter(c => c.significant).length;
+    const numSignificantAdj = correlations.filter(c => c.significantAdj).length;
+
     return {
       all: correlations,
       matrix: corrMatrix,
+      pValueMatrix,
       topPositive,
       topNegative,
       mutants: mutantsWithBoth.map(d => d.mutant),
       gromacsFeatures,
       lhMetrics,
+      n,
+      numTests,
+      numSignificant,
+      numSignificantAdj,
     };
   }, [combinedData]);
 
@@ -1314,6 +1424,37 @@ export function PCAAnalysis() {
             </p>
           </div>
 
+          {/* Statistical Summary */}
+          <div className="bg-gray-50 rounded-lg border p-4 mb-4">
+            <h4 className="font-semibold text-gray-800 mb-3">Statistical Summary</h4>
+            <div className="grid grid-cols-5 gap-4 text-sm">
+              <div className="bg-white rounded p-3 border">
+                <div className="text-gray-500 text-xs">Sample Size (n)</div>
+                <div className="text-xl font-bold text-gray-900">{gromacsLhCorrelations.n}</div>
+              </div>
+              <div className="bg-white rounded p-3 border">
+                <div className="text-gray-500 text-xs">Total Tests</div>
+                <div className="text-xl font-bold text-gray-900">{gromacsLhCorrelations.numTests}</div>
+              </div>
+              <div className="bg-white rounded p-3 border">
+                <div className="text-gray-500 text-xs">Significant (p&lt;0.05)</div>
+                <div className="text-xl font-bold text-blue-600">{gromacsLhCorrelations.numSignificant}</div>
+              </div>
+              <div className="bg-white rounded p-3 border">
+                <div className="text-gray-500 text-xs">Bonferroni Sig.</div>
+                <div className="text-xl font-bold text-green-600">{gromacsLhCorrelations.numSignificantAdj}</div>
+              </div>
+              <div className="bg-white rounded p-3 border">
+                <div className="text-gray-500 text-xs">Expected False Pos.</div>
+                <div className="text-xl font-bold text-orange-600">{(gromacsLhCorrelations.numTests * 0.05).toFixed(1)}</div>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              ⚠️ With {gromacsLhCorrelations.numTests} tests at α=0.05, we expect ~{(gromacsLhCorrelations.numTests * 0.05).toFixed(0)} false positives by chance.
+              Only {gromacsLhCorrelations.numSignificantAdj} correlations survive Bonferroni correction (p_adj &lt; 0.05).
+            </p>
+          </div>
+
           {/* Top Correlations Summary */}
           <div className="grid grid-cols-2 gap-6">
             <div className="bg-green-50 rounded-lg border border-green-200 p-4">
@@ -1321,14 +1462,25 @@ export function PCAAnalysis() {
               <div className="space-y-2">
                 {gromacsLhCorrelations.topPositive.map((c, i) => (
                   <div key={i} className="flex items-center justify-between text-sm">
-                    <div>
+                    <div className="flex-1">
                       <span className="font-medium text-green-700">{c.feature}</span>
                       <span className="text-gray-500 mx-1">↔</span>
                       <span className="text-green-600">{c.metric}</span>
                     </div>
-                    <span className="font-mono text-green-800 bg-green-100 px-2 py-0.5 rounded">
-                      r = +{c.r.toFixed(3)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-green-800 bg-green-100 px-2 py-0.5 rounded">
+                        r = +{c.r.toFixed(3)}
+                      </span>
+                      <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${
+                        c.significantAdj ? 'bg-green-600 text-white' :
+                        c.significant ? 'bg-yellow-200 text-yellow-800' :
+                        'bg-gray-200 text-gray-600'
+                      }`}>
+                        {c.pValue < 0.001 ? 'p<.001' : `p=${c.pValue.toFixed(3)}`}
+                      </span>
+                      {c.significantAdj && <span className="text-green-600 text-xs">★★</span>}
+                      {!c.significantAdj && c.significant && <span className="text-yellow-600 text-xs">★</span>}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1339,24 +1491,43 @@ export function PCAAnalysis() {
               <div className="space-y-2">
                 {gromacsLhCorrelations.topNegative.map((c, i) => (
                   <div key={i} className="flex items-center justify-between text-sm">
-                    <div>
+                    <div className="flex-1">
                       <span className="font-medium text-red-700">{c.feature}</span>
                       <span className="text-gray-500 mx-1">↔</span>
                       <span className="text-red-600">{c.metric}</span>
                     </div>
-                    <span className="font-mono text-red-800 bg-red-100 px-2 py-0.5 rounded">
-                      r = {c.r.toFixed(3)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-red-800 bg-red-100 px-2 py-0.5 rounded">
+                        r = {c.r.toFixed(3)}
+                      </span>
+                      <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${
+                        c.significantAdj ? 'bg-green-600 text-white' :
+                        c.significant ? 'bg-yellow-200 text-yellow-800' :
+                        'bg-gray-200 text-gray-600'
+                      }`}>
+                        {c.pValue < 0.001 ? 'p<.001' : `p=${c.pValue.toFixed(3)}`}
+                      </span>
+                      {c.significantAdj && <span className="text-green-600 text-xs">★★</span>}
+                      {!c.significantAdj && c.significant && <span className="text-yellow-600 text-xs">★</span>}
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           </div>
 
+          {/* Legend for significance */}
+          <div className="flex justify-center gap-6 text-xs text-gray-600 my-2">
+            <span><span className="text-green-600">★★</span> = Bonferroni significant (p_adj &lt; 0.05)</span>
+            <span><span className="text-yellow-600">★</span> = Nominally significant (p &lt; 0.05)</span>
+            <span>No star = Not significant</span>
+          </div>
+
           {/* Correlation Heatmap */}
           <div className="bg-white rounded-lg border p-4">
             <h3 className="font-semibold text-gray-900 mb-4">
               Correlation Heatmap: GROMACS Features vs L/H Metrics
+              <span className="text-xs font-normal text-gray-500 ml-2">(★ = p&lt;0.05, ★★ = Bonferroni sig.)</span>
             </h3>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -1375,6 +1546,10 @@ export function PCAAnalysis() {
                     <tr key={feature} className="border-t">
                       <td className="px-2 py-1 font-medium text-gray-700 text-xs">{feature}</td>
                       {gromacsLhCorrelations.matrix[i].map((r, j) => {
+                        const corr = gromacsLhCorrelations.all.find(c => c.idx[0] === i && c.idx[1] === j);
+                        const pValue = corr?.pValue ?? 1;
+                        const significant = corr?.significant ?? false;
+                        const significantAdj = corr?.significantAdj ?? false;
                         // Color scale: blue (negative) -> white (0) -> red (positive)
                         const absR = Math.abs(r);
                         const intensity = Math.min(absR * 1.5, 1); // Scale up for visibility
@@ -1385,11 +1560,13 @@ export function PCAAnalysis() {
                         return (
                           <td
                             key={j}
-                            className="px-2 py-1 text-center font-mono"
+                            className="px-2 py-1 text-center font-mono relative"
                             style={{ backgroundColor: bgColor, color: textColor }}
-                            title={`${feature} ↔ ${LH_METRIC_NAMES[j]}: r = ${r.toFixed(3)}`}
+                            title={`${feature} ↔ ${LH_METRIC_NAMES[j]}: r = ${r.toFixed(3)}, p = ${pValue.toFixed(4)}, 95% CI: [${corr?.ci95[0].toFixed(2)}, ${corr?.ci95[1].toFixed(2)}]`}
                           >
                             {r.toFixed(2)}
+                            {significantAdj && <sup className="ml-0.5">★★</sup>}
+                            {!significantAdj && significant && <sup className="ml-0.5">★</sup>}
                           </td>
                         );
                       })}
@@ -1762,52 +1939,71 @@ export function PCAAnalysis() {
           {/* Correlation Table */}
           <div className="bg-white rounded-lg border overflow-hidden">
             <h3 className="font-semibold text-gray-900 p-4 border-b">
-              All Correlations (sorted by |r|)
+              All Correlations with Statistical Assessment (sorted by |r|)
             </h3>
             <div className="max-h-96 overflow-y-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600">GROMACS Feature</th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600">L/H Metric</th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-600">r</th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-600">|r|</th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">Strength</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600">GROMACS Feature</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600">L/H Metric</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">r</th>
+                    <th className="px-3 py-2 text-center font-medium text-gray-600">95% CI</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">p-value</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">p_adj</th>
+                    <th className="px-3 py-2 text-center font-medium text-gray-600">Sig.</th>
                   </tr>
                 </thead>
                 <tbody>
                   {[...gromacsLhCorrelations.all]
                     .sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
-                    .slice(0, 30)
+                    .slice(0, 40)
                     .map((c, i) => {
-                      const absR = Math.abs(c.r);
-                      let strength = 'Weak';
-                      let strengthColor = 'text-gray-500';
-                      if (absR > 0.7) {
-                        strength = 'Strong';
-                        strengthColor = 'text-green-600';
-                      } else if (absR > 0.4) {
-                        strength = 'Moderate';
-                        strengthColor = 'text-yellow-600';
-                      }
                       return (
-                        <tr key={i} className="border-t hover:bg-gray-50">
-                          <td className="px-4 py-2 font-medium">{c.feature}</td>
-                          <td className="px-4 py-2">{c.metric}</td>
-                          <td className="px-4 py-2 text-right font-mono">
+                        <tr key={i} className={`border-t hover:bg-gray-50 ${c.significantAdj ? 'bg-green-50' : ''}`}>
+                          <td className="px-3 py-2 font-medium text-xs">{c.feature}</td>
+                          <td className="px-3 py-2 text-xs">{c.metric}</td>
+                          <td className="px-3 py-2 text-right font-mono text-xs">
                             <span className={c.r > 0 ? 'text-green-600' : 'text-red-600'}>
                               {c.r > 0 ? '+' : ''}{c.r.toFixed(3)}
                             </span>
                           </td>
-                          <td className="px-4 py-2 text-right font-mono">{absR.toFixed(3)}</td>
-                          <td className={`px-4 py-2 text-center font-medium ${strengthColor}`}>
-                            {strength}
+                          <td className="px-3 py-2 text-center font-mono text-xs text-gray-500">
+                            [{c.ci95[0].toFixed(2)}, {c.ci95[1].toFixed(2)}]
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-xs">
+                            <span className={c.significant ? 'font-semibold' : 'text-gray-400'}>
+                              {c.pValue < 0.001 ? '<.001' : c.pValue.toFixed(3)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-xs">
+                            <span className={c.significantAdj ? 'font-semibold text-green-600' : 'text-gray-400'}>
+                              {c.pValueAdj < 0.001 ? '<.001' : c.pValueAdj > 1 ? '>1' : c.pValueAdj.toFixed(3)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {c.significantAdj ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                ★★
+                              </span>
+                            ) : c.significant ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                ★
+                              </span>
+                            ) : (
+                              <span className="text-gray-300">-</span>
+                            )}
                           </td>
                         </tr>
                       );
                     })}
                 </tbody>
               </table>
+            </div>
+            <div className="p-3 bg-gray-50 border-t text-xs text-gray-600">
+              <strong>Legend:</strong> r = Pearson correlation, 95% CI = confidence interval (Fisher z-transform),
+              p-value = two-tailed, p_adj = Bonferroni-corrected ({gromacsLhCorrelations.numTests} tests).
+              ★★ = survives Bonferroni, ★ = nominally significant (p&lt;0.05)
             </div>
           </div>
         </>
