@@ -1,0 +1,45 @@
+HISTIDINE GATE ANALYSIS: Rub20
+============================================================
+
+TOP 10 POSITIONS:
+----------------------------------------
+
+ 10 LEU - TIER 1
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 23 ASN - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 42 LEU - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 40 ASP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 39 VAL - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 38 TRP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 37 ASP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 36 ASP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 29 THR - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 25 ILE - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3

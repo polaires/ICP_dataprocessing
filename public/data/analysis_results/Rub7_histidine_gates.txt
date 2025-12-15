@@ -1,0 +1,45 @@
+HISTIDINE GATE ANALYSIS: Rub7
+============================================================
+
+TOP 10 POSITIONS:
+----------------------------------------
+
+ 10 TYR - TIER 1
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 11 ILE - TIER 1
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 41 ASP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 40 ASP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 38 ASP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 37 LYS - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 36 TRP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 35 ASP - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 29 PHE - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
+
+ 27 THR - TIER 3
+  Score: 0.150 ± 0.000
+  Runs: 3
