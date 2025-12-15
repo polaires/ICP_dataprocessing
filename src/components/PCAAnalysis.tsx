@@ -29,7 +29,7 @@ import {
   FEATURE_NAMES,
   type AggregatedMutantFeatures,
 } from '@/lib/gromacsParser';
-import { performPCA, getTopFeatures, type PCAResult } from '@/lib/pca';
+import { performPCA, getTopFeatures, correlationMatrix, type PCAResult } from '@/lib/pca';
 import { useDataStore } from '@/store/useDataStore';
 import { linearRegression } from '@/lib/statistics';
 import { LIGHT_REE, HEAVY_REE, WATER_EXCHANGE_RATES } from '@/lib/constants';
@@ -281,6 +281,120 @@ export function PCAAnalysis() {
     if (!pcaResult) return [];
     return getTopFeatures(pcaResult, FEATURE_NAMES, 5);
   }, [pcaResult]);
+
+  // L/H metric names for correlation analysis
+  const LH_METRIC_NAMES = [
+    'L/H Score',
+    'Light Slope',
+    'Heavy Slope',
+    'Slope Diff',
+    'Vertical Offset',
+    'Light Sum',
+    'Heavy Sum',
+  ];
+
+  // Calculate correlations between GROMACS features and L/H metrics
+  const gromacsLhCorrelations = useMemo(() => {
+    const mutantsWithBoth = combinedData.filter(d => d.lhAnalysis);
+    if (mutantsWithBoth.length < 3) return null;
+
+    // Build data matrix: each row is a mutant, columns are [GROMACS features..., L/H metrics...]
+    const gromacsFeatures = mutantsWithBoth.map(d => getFeatureVector(d.features));
+    const lhMetrics = mutantsWithBoth.map(d => [
+      d.lhAnalysis!.lhScore,
+      d.lhAnalysis!.lightSlope,
+      d.lhAnalysis!.heavySlope,
+      d.lhAnalysis!.slopeDifference,
+      d.lhAnalysis!.verticalOffset,
+      d.lhAnalysis!.lightSum,
+      d.lhAnalysis!.heavySum,
+    ]);
+
+    // Calculate Pearson correlation for each GROMACS feature vs each L/H metric
+    const correlations: { feature: string; metric: string; r: number; idx: [number, number] }[] = [];
+
+    for (let i = 0; i < FEATURE_NAMES.length; i++) {
+      const xVals = gromacsFeatures.map(gf => gf[i]);
+      const xMean = xVals.reduce((a, b) => a + b, 0) / xVals.length;
+      const xStd = Math.sqrt(xVals.reduce((acc, v) => acc + (v - xMean) ** 2, 0) / xVals.length);
+
+      for (let j = 0; j < LH_METRIC_NAMES.length; j++) {
+        const yVals = lhMetrics.map(lh => lh[j]);
+        const yMean = yVals.reduce((a, b) => a + b, 0) / yVals.length;
+        const yStd = Math.sqrt(yVals.reduce((acc, v) => acc + (v - yMean) ** 2, 0) / yVals.length);
+
+        if (xStd === 0 || yStd === 0) {
+          correlations.push({ feature: FEATURE_NAMES[i], metric: LH_METRIC_NAMES[j], r: 0, idx: [i, j] });
+          continue;
+        }
+
+        // Pearson correlation
+        let covariance = 0;
+        for (let k = 0; k < xVals.length; k++) {
+          covariance += (xVals[k] - xMean) * (yVals[k] - yMean);
+        }
+        covariance /= xVals.length;
+        const r = covariance / (xStd * yStd);
+        correlations.push({ feature: FEATURE_NAMES[i], metric: LH_METRIC_NAMES[j], r, idx: [i, j] });
+      }
+    }
+
+    // Also build correlation matrix for heatmap
+    const corrMatrix: number[][] = [];
+    for (let i = 0; i < FEATURE_NAMES.length; i++) {
+      const row: number[] = [];
+      for (let j = 0; j < LH_METRIC_NAMES.length; j++) {
+        const corr = correlations.find(c => c.idx[0] === i && c.idx[1] === j);
+        row.push(corr?.r ?? 0);
+      }
+      corrMatrix.push(row);
+    }
+
+    // Find top correlations
+    const sortedCorrelations = [...correlations].sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+    const topPositive = sortedCorrelations.filter(c => c.r > 0).slice(0, 5);
+    const topNegative = sortedCorrelations.filter(c => c.r < 0).slice(0, 5);
+
+    return {
+      all: correlations,
+      matrix: corrMatrix,
+      topPositive,
+      topNegative,
+      mutants: mutantsWithBoth.map(d => d.mutant),
+      gromacsFeatures,
+      lhMetrics,
+    };
+  }, [combinedData]);
+
+  // Combined PCA with both GROMACS features and L/H metrics
+  const combinedPcaResult = useMemo((): { pca: PCAResult; featureNames: string[] } | null => {
+    const mutantsWithBoth = combinedData.filter(d => d.lhAnalysis);
+    if (mutantsWithBoth.length < 3) return null;
+
+    // Combine GROMACS features with L/H metrics
+    const combinedFeatures = mutantsWithBoth.map(d => {
+      const gromacsVec = getFeatureVector(d.features);
+      const lhVec = [
+        d.lhAnalysis!.lhScore,
+        d.lhAnalysis!.lightSlope,
+        d.lhAnalysis!.heavySlope,
+        d.lhAnalysis!.slopeDifference,
+        d.lhAnalysis!.verticalOffset,
+      ];
+      return [...gromacsVec, ...lhVec];
+    });
+
+    const allFeatureNames = [...FEATURE_NAMES, ...LH_METRIC_NAMES.slice(0, 5)];
+    const pca = performPCA(combinedFeatures);
+
+    return { pca, featureNames: allFeatureNames };
+  }, [combinedData]);
+
+  // Get combined PCA top features
+  const combinedTopFeatures = useMemo(() => {
+    if (!combinedPcaResult) return [];
+    return getTopFeatures(combinedPcaResult.pca, combinedPcaResult.featureNames, 5);
+  }, [combinedPcaResult]);
 
   if (isLoading) {
     return (
@@ -1181,6 +1295,725 @@ export function PCAAnalysis() {
                   <li>• May relate to 4f electron configuration changes</li>
                 </ul>
               </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* GROMACS vs L/H Correlation Analysis */}
+      {gromacsLhCorrelations && (
+        <>
+          {/* Section Header */}
+          <div className="border-t-4 border-purple-300 pt-6 mt-8">
+            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-2">
+              <TrendingUp className="w-6 h-6 text-purple-600" />
+              Structure-Function Correlation Analysis
+            </h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Correlations between GROMACS simulation features and Light/Heavy REE discrimination metrics
+            </p>
+          </div>
+
+          {/* Top Correlations Summary */}
+          <div className="grid grid-cols-2 gap-6">
+            <div className="bg-green-50 rounded-lg border border-green-200 p-4">
+              <h4 className="font-semibold text-green-800 mb-3">Strongest Positive Correlations</h4>
+              <div className="space-y-2">
+                {gromacsLhCorrelations.topPositive.map((c, i) => (
+                  <div key={i} className="flex items-center justify-between text-sm">
+                    <div>
+                      <span className="font-medium text-green-700">{c.feature}</span>
+                      <span className="text-gray-500 mx-1">↔</span>
+                      <span className="text-green-600">{c.metric}</span>
+                    </div>
+                    <span className="font-mono text-green-800 bg-green-100 px-2 py-0.5 rounded">
+                      r = +{c.r.toFixed(3)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-red-50 rounded-lg border border-red-200 p-4">
+              <h4 className="font-semibold text-red-800 mb-3">Strongest Negative Correlations</h4>
+              <div className="space-y-2">
+                {gromacsLhCorrelations.topNegative.map((c, i) => (
+                  <div key={i} className="flex items-center justify-between text-sm">
+                    <div>
+                      <span className="font-medium text-red-700">{c.feature}</span>
+                      <span className="text-gray-500 mx-1">↔</span>
+                      <span className="text-red-600">{c.metric}</span>
+                    </div>
+                    <span className="font-mono text-red-800 bg-red-100 px-2 py-0.5 rounded">
+                      r = {c.r.toFixed(3)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Correlation Heatmap */}
+          <div className="bg-white rounded-lg border p-4">
+            <h3 className="font-semibold text-gray-900 mb-4">
+              Correlation Heatmap: GROMACS Features vs L/H Metrics
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr>
+                    <th className="px-2 py-1 text-left font-medium text-gray-600 w-36">Feature</th>
+                    {LH_METRIC_NAMES.map(name => (
+                      <th key={name} className="px-2 py-1 text-center font-medium text-gray-600 min-w-[70px]">
+                        {name}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {FEATURE_NAMES.map((feature, i) => (
+                    <tr key={feature} className="border-t">
+                      <td className="px-2 py-1 font-medium text-gray-700 text-xs">{feature}</td>
+                      {gromacsLhCorrelations.matrix[i].map((r, j) => {
+                        // Color scale: blue (negative) -> white (0) -> red (positive)
+                        const absR = Math.abs(r);
+                        const intensity = Math.min(absR * 1.5, 1); // Scale up for visibility
+                        const bgColor = r > 0
+                          ? `rgba(34, 197, 94, ${intensity})`  // green for positive
+                          : `rgba(239, 68, 68, ${intensity})`; // red for negative
+                        const textColor = absR > 0.5 ? 'white' : 'inherit';
+                        return (
+                          <td
+                            key={j}
+                            className="px-2 py-1 text-center font-mono"
+                            style={{ backgroundColor: bgColor, color: textColor }}
+                            title={`${feature} ↔ ${LH_METRIC_NAMES[j]}: r = ${r.toFixed(3)}`}
+                          >
+                            {r.toFixed(2)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-center items-center gap-4 mt-3 text-xs text-gray-600">
+              <div className="flex items-center gap-1">
+                <div className="w-4 h-4 rounded" style={{ backgroundColor: 'rgba(239, 68, 68, 0.8)' }} />
+                <span>Strong Negative</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-4 h-4 rounded bg-gray-100 border" />
+                <span>Weak/None</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-4 h-4 rounded" style={{ backgroundColor: 'rgba(34, 197, 94, 0.8)' }} />
+                <span>Strong Positive</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Key Correlation Scatter Plots */}
+          <div className="bg-white rounded-lg border p-4">
+            <h3 className="font-semibold text-gray-900 mb-4">
+              Key Structure-Function Relationships
+            </h3>
+            <div className="grid grid-cols-3 gap-4">
+              {/* Scatter 1: Water Exchange vs L/H Score */}
+              <div>
+                <h4 className="text-xs font-medium text-gray-700 mb-2 text-center">
+                  Water Exchange Rate vs L/H Score
+                </h4>
+                <ResponsiveContainer width="100%" height={200}>
+                  <ScatterChart margin={{ top: 10, right: 10, bottom: 30, left: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      type="number"
+                      dataKey="x"
+                      name="Water Exchange Rate"
+                      label={{ value: 'k_ex (events/ns)', position: 'bottom', offset: 15, fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="y"
+                      name="L/H Score"
+                      label={{ value: 'L/H Score', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <Tooltip
+                      content={({ payload }) => {
+                        if (!payload || payload.length === 0) return null;
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white border rounded shadow-lg p-2 text-xs">
+                            <div className="font-bold">{data.mutant}</div>
+                            <div>k_ex: {data.x.toFixed(2)}</div>
+                            <div>L/H Score: {data.y.toFixed(1)}</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Scatter
+                      data={combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map(d => ({
+                          mutant: d.mutant,
+                          x: d.features.water_exchange_rate,
+                          y: d.lhAnalysis!.lhScore,
+                        }))}
+                    >
+                      {combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={MUTANT_COLORS[entry.mutant] || '#888'} />
+                        ))}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Scatter 2: Binding Volume vs Slope Difference */}
+              <div>
+                <h4 className="text-xs font-medium text-gray-700 mb-2 text-center">
+                  Binding Volume vs Slope Difference
+                </h4>
+                <ResponsiveContainer width="100%" height={200}>
+                  <ScatterChart margin={{ top: 10, right: 10, bottom: 30, left: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      type="number"
+                      dataKey="x"
+                      name="Binding Volume"
+                      label={{ value: 'Volume (Å³)', position: 'bottom', offset: 15, fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="y"
+                      name="Slope Difference"
+                      label={{ value: 'Slope Diff', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <Tooltip
+                      content={({ payload }) => {
+                        if (!payload || payload.length === 0) return null;
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white border rounded shadow-lg p-2 text-xs">
+                            <div className="font-bold">{data.mutant}</div>
+                            <div>Volume: {data.x.toFixed(1)} Å³</div>
+                            <div>Slope Diff: {data.y.toFixed(3)}</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Scatter
+                      data={combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map(d => ({
+                          mutant: d.mutant,
+                          x: d.features.binding_volume_mean,
+                          y: d.lhAnalysis!.slopeDifference,
+                        }))}
+                    >
+                      {combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={MUTANT_COLORS[entry.mutant] || '#888'} />
+                        ))}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Scatter 3: Asymmetry vs Vertical Offset */}
+              <div>
+                <h4 className="text-xs font-medium text-gray-700 mb-2 text-center">
+                  Asymmetry vs Vertical Offset
+                </h4>
+                <ResponsiveContainer width="100%" height={200}>
+                  <ScatterChart margin={{ top: 10, right: 10, bottom: 30, left: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      type="number"
+                      dataKey="x"
+                      name="Asymmetry"
+                      label={{ value: 'Asymmetry', position: 'bottom', offset: 15, fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="y"
+                      name="Vertical Offset"
+                      label={{ value: 'Offset (%)', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <Tooltip
+                      content={({ payload }) => {
+                        if (!payload || payload.length === 0) return null;
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white border rounded shadow-lg p-2 text-xs">
+                            <div className="font-bold">{data.mutant}</div>
+                            <div>Asymmetry: {data.x.toFixed(3)}</div>
+                            <div>Offset: {data.y.toFixed(2)}%</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Scatter
+                      data={combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map(d => ({
+                          mutant: d.mutant,
+                          x: d.features.asymmetry_mean,
+                          y: d.lhAnalysis!.verticalOffset,
+                        }))}
+                    >
+                      {combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={MUTANT_COLORS[entry.mutant] || '#888'} />
+                        ))}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Scatter 4: Total Coordination vs L/H Score */}
+              <div>
+                <h4 className="text-xs font-medium text-gray-700 mb-2 text-center">
+                  Total Coordination vs L/H Score
+                </h4>
+                <ResponsiveContainer width="100%" height={200}>
+                  <ScatterChart margin={{ top: 10, right: 10, bottom: 30, left: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      type="number"
+                      dataKey="x"
+                      name="Total Coordination"
+                      label={{ value: 'Total Coord', position: 'bottom', offset: 15, fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="y"
+                      name="L/H Score"
+                      label={{ value: 'L/H Score', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <Tooltip
+                      content={({ payload }) => {
+                        if (!payload || payload.length === 0) return null;
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white border rounded shadow-lg p-2 text-xs">
+                            <div className="font-bold">{data.mutant}</div>
+                            <div>Coord: {data.x.toFixed(2)}</div>
+                            <div>L/H Score: {data.y.toFixed(1)}</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Scatter
+                      data={combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map(d => ({
+                          mutant: d.mutant,
+                          x: d.features.total_coord_mean,
+                          y: d.lhAnalysis!.lhScore,
+                        }))}
+                    >
+                      {combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={MUTANT_COLORS[entry.mutant] || '#888'} />
+                        ))}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Scatter 5: Residence Time vs Vertical Offset */}
+              <div>
+                <h4 className="text-xs font-medium text-gray-700 mb-2 text-center">
+                  Residence Time vs Vertical Offset
+                </h4>
+                <ResponsiveContainer width="100%" height={200}>
+                  <ScatterChart margin={{ top: 10, right: 10, bottom: 30, left: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      type="number"
+                      dataKey="x"
+                      name="Residence Time"
+                      label={{ value: 'Res. Time (ps)', position: 'bottom', offset: 15, fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="y"
+                      name="Vertical Offset"
+                      label={{ value: 'Offset (%)', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <Tooltip
+                      content={({ payload }) => {
+                        if (!payload || payload.length === 0) return null;
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white border rounded shadow-lg p-2 text-xs">
+                            <div className="font-bold">{data.mutant}</div>
+                            <div>Res. Time: {data.x.toFixed(1)} ps</div>
+                            <div>Offset: {data.y.toFixed(2)}%</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Scatter
+                      data={combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map(d => ({
+                          mutant: d.mutant,
+                          x: d.features.residence_time_mean,
+                          y: d.lhAnalysis!.verticalOffset,
+                        }))}
+                    >
+                      {combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={MUTANT_COLORS[entry.mutant] || '#888'} />
+                        ))}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Scatter 6: Protein Coordination vs Heavy Sum */}
+              <div>
+                <h4 className="text-xs font-medium text-gray-700 mb-2 text-center">
+                  Protein Coordination vs Heavy Sum
+                </h4>
+                <ResponsiveContainer width="100%" height={200}>
+                  <ScatterChart margin={{ top: 10, right: 10, bottom: 30, left: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      type="number"
+                      dataKey="x"
+                      name="Protein Coordination"
+                      label={{ value: 'Protein Coord', position: 'bottom', offset: 15, fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="y"
+                      name="Heavy Sum"
+                      label={{ value: 'Heavy %', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                      tick={{ fontSize: 9 }}
+                    />
+                    <Tooltip
+                      content={({ payload }) => {
+                        if (!payload || payload.length === 0) return null;
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white border rounded shadow-lg p-2 text-xs">
+                            <div className="font-bold">{data.mutant}</div>
+                            <div>Protein Coord: {data.x.toFixed(2)}</div>
+                            <div>Heavy Sum: {data.y.toFixed(1)}%</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Scatter
+                      data={combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map(d => ({
+                          mutant: d.mutant,
+                          x: d.features.protein_coord_mean,
+                          y: d.lhAnalysis!.heavySum,
+                        }))}
+                    >
+                      {combinedData
+                        .filter(d => d.lhAnalysis)
+                        .map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={MUTANT_COLORS[entry.mutant] || '#888'} />
+                        ))}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Legend */}
+            <div className="flex flex-wrap justify-center gap-3 mt-4 pt-3 border-t">
+              {combinedData.filter(d => d.lhAnalysis).map(d => (
+                <div key={d.mutant} className="flex items-center gap-1.5 text-xs">
+                  <div
+                    className="w-2.5 h-2.5 rounded-full"
+                    style={{ backgroundColor: MUTANT_COLORS[d.mutant] || '#888' }}
+                  />
+                  <span>{d.mutant}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Correlation Table */}
+          <div className="bg-white rounded-lg border overflow-hidden">
+            <h3 className="font-semibold text-gray-900 p-4 border-b">
+              All Correlations (sorted by |r|)
+            </h3>
+            <div className="max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600">GROMACS Feature</th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600">L/H Metric</th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-600">r</th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-600">|r|</th>
+                    <th className="px-4 py-2 text-center font-medium text-gray-600">Strength</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...gromacsLhCorrelations.all]
+                    .sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
+                    .slice(0, 30)
+                    .map((c, i) => {
+                      const absR = Math.abs(c.r);
+                      let strength = 'Weak';
+                      let strengthColor = 'text-gray-500';
+                      if (absR > 0.7) {
+                        strength = 'Strong';
+                        strengthColor = 'text-green-600';
+                      } else if (absR > 0.4) {
+                        strength = 'Moderate';
+                        strengthColor = 'text-yellow-600';
+                      }
+                      return (
+                        <tr key={i} className="border-t hover:bg-gray-50">
+                          <td className="px-4 py-2 font-medium">{c.feature}</td>
+                          <td className="px-4 py-2">{c.metric}</td>
+                          <td className="px-4 py-2 text-right font-mono">
+                            <span className={c.r > 0 ? 'text-green-600' : 'text-red-600'}>
+                              {c.r > 0 ? '+' : ''}{c.r.toFixed(3)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono">{absR.toFixed(3)}</td>
+                          <td className={`px-4 py-2 text-center font-medium ${strengthColor}`}>
+                            {strength}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Combined PCA Analysis */}
+      {combinedPcaResult && combinedPcaResult.pca.nComponents >= 2 && (
+        <>
+          <div className="border-t-4 border-indigo-300 pt-6 mt-8">
+            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-2">
+              <Layers className="w-6 h-6 text-indigo-600" />
+              Combined PCA: GROMACS + L/H Metrics
+            </h2>
+            <p className="text-sm text-gray-600 mb-4">
+              PCA including both simulation features and L/H discrimination metrics ({combinedPcaResult.featureNames.length} total features)
+            </p>
+          </div>
+
+          {/* Combined PCA Stats */}
+          <div className="grid grid-cols-4 gap-4">
+            <div className="bg-indigo-50 rounded-lg p-4">
+              <div className="text-sm text-indigo-600 font-medium">Total Features</div>
+              <div className="text-2xl font-bold text-indigo-900">{combinedPcaResult.featureNames.length}</div>
+            </div>
+            <div className="bg-blue-50 rounded-lg p-4">
+              <div className="text-sm text-blue-600 font-medium">PC1 Variance</div>
+              <div className="text-2xl font-bold text-blue-900">
+                {(combinedPcaResult.pca.explainedVarianceRatio[0] * 100).toFixed(1)}%
+              </div>
+            </div>
+            <div className="bg-green-50 rounded-lg p-4">
+              <div className="text-sm text-green-600 font-medium">PC2 Variance</div>
+              <div className="text-2xl font-bold text-green-900">
+                {(combinedPcaResult.pca.explainedVarianceRatio[1] * 100).toFixed(1)}%
+              </div>
+            </div>
+            <div className="bg-orange-50 rounded-lg p-4">
+              <div className="text-sm text-orange-600 font-medium">PC1+PC2 Total</div>
+              <div className="text-2xl font-bold text-orange-900">
+                {(combinedPcaResult.pca.cumulativeVarianceRatio[1] * 100).toFixed(1)}%
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-6">
+            {/* Combined PCA Biplot */}
+            <div className="bg-white rounded-lg border p-4">
+              <h3 className="font-semibold text-gray-900 mb-4">
+                Combined PCA Biplot (PC1 vs PC2)
+              </h3>
+              <ResponsiveContainer width="100%" height={350}>
+                <ScatterChart margin={{ top: 20, right: 20, bottom: 60, left: 60 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    type="number"
+                    dataKey="x"
+                    name="PC1"
+                    domain={['auto', 'auto']}
+                    label={{
+                      value: `PC1 (${(combinedPcaResult.pca.explainedVarianceRatio[0] * 100).toFixed(1)}%)`,
+                      position: 'bottom',
+                      offset: 40,
+                    }}
+                  />
+                  <YAxis
+                    type="number"
+                    dataKey="y"
+                    name="PC2"
+                    domain={['auto', 'auto']}
+                    label={{
+                      value: `PC2 (${(combinedPcaResult.pca.explainedVarianceRatio[1] * 100).toFixed(1)}%)`,
+                      angle: -90,
+                      position: 'insideLeft',
+                      offset: -40,
+                    }}
+                  />
+                  <Tooltip
+                    content={({ payload }) => {
+                      if (!payload || payload.length === 0) return null;
+                      const data = payload[0].payload;
+                      return (
+                        <div className="bg-white border rounded shadow-lg p-3 text-sm">
+                          <div className="font-bold text-gray-900">{data.mutant}</div>
+                          <div className="text-gray-600">PC1: {data.x.toFixed(3)}</div>
+                          <div className="text-gray-600">PC2: {data.y.toFixed(3)}</div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Scatter
+                    data={combinedData
+                      .filter(d => d.lhAnalysis)
+                      .map((d, idx) => ({
+                        mutant: d.mutant,
+                        x: combinedPcaResult.pca.transformedData[idx]?.[0] || 0,
+                        y: combinedPcaResult.pca.transformedData[idx]?.[1] || 0,
+                      }))}
+                  >
+                    {combinedData
+                      .filter(d => d.lhAnalysis)
+                      .map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={MUTANT_COLORS[entry.mutant] || '#888'} />
+                      ))}
+                  </Scatter>
+                </ScatterChart>
+              </ResponsiveContainer>
+              {/* Legend */}
+              <div className="flex flex-wrap justify-center gap-3 mt-2">
+                {combinedData.filter(d => d.lhAnalysis).map(d => (
+                  <div key={d.mutant} className="flex items-center gap-1.5 text-xs">
+                    <div
+                      className="w-2.5 h-2.5 rounded-full"
+                      style={{ backgroundColor: MUTANT_COLORS[d.mutant] || '#888' }}
+                    />
+                    <span>{d.mutant}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Combined Top Features */}
+            <div className="bg-white rounded-lg border p-4">
+              <h3 className="font-semibold text-gray-900 mb-4">
+                Top Contributing Features (Combined PC1)
+              </h3>
+              {combinedTopFeatures[0] && (
+                <>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart
+                      data={combinedTopFeatures[0].features.map(f => ({
+                        name: f.name.length > 15 ? f.name.slice(0, 15) + '...' : f.name,
+                        fullName: f.name,
+                        loading: f.loading,
+                        isLH: LH_METRIC_NAMES.slice(0, 5).includes(f.name),
+                      }))}
+                      layout="vertical"
+                    >
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" domain={['auto', 'auto']} />
+                      <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11 }} />
+                      <Tooltip
+                        content={({ payload }) => {
+                          if (!payload || payload.length === 0) return null;
+                          const data = payload[0].payload;
+                          return (
+                            <div className="bg-white border rounded shadow-lg p-2 text-sm">
+                              <div className="font-medium">{data.fullName}</div>
+                              <div>Loading: {data.loading.toFixed(3)}</div>
+                              <div className="text-gray-500 text-xs">
+                                {data.isLH ? 'L/H Metric' : 'GROMACS Feature'}
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Bar dataKey="loading">
+                        {combinedTopFeatures[0].features.map((entry, index) => {
+                          const isLH = LH_METRIC_NAMES.slice(0, 5).includes(entry.name);
+                          const positiveColor = isLH ? '#8B5CF6' : '#10B981'; // purple for L/H, green for GROMACS
+                          const negativeColor = isLH ? '#EC4899' : '#EF4444'; // pink for L/H, red for GROMACS
+                          return (
+                            <Cell
+                              key={`cell-${index}`}
+                              fill={entry.loading > 0 ? positiveColor : negativeColor}
+                            />
+                          );
+                        })}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="flex justify-center gap-4 mt-2 text-xs">
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 rounded" style={{ backgroundColor: '#10B981' }} />
+                      <span>GROMACS (+)</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 rounded" style={{ backgroundColor: '#EF4444' }} />
+                      <span>GROMACS (-)</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 rounded" style={{ backgroundColor: '#8B5CF6' }} />
+                      <span>L/H Metric (+)</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 rounded" style={{ backgroundColor: '#EC4899' }} />
+                      <span>L/H Metric (-)</span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Combined PCA Interpretation */}
+          <div className="bg-gradient-to-r from-indigo-50 to-blue-50 rounded-lg border border-indigo-200 p-4">
+            <h4 className="font-semibold text-indigo-900 mb-3">Combined PCA Interpretation</h4>
+            <div className="text-sm text-indigo-700 space-y-2">
+              <p>
+                <strong>Purpose:</strong> This PCA combines GROMACS simulation features (structure/dynamics) with L/H metrics (binding selectivity) to identify latent factors that explain both simulation behavior and experimental outcomes.
+              </p>
+              <p>
+                <strong>Key insight:</strong> If L/H metrics (purple bars) appear as top contributors in PC1, it suggests the simulation features effectively predict binding selectivity. If they load on different PCs, the structure-function relationship may be more complex.
+              </p>
+              <p>
+                <strong>Mutant clustering:</strong> Mutants close together in the combined PCA space share similar structural dynamics AND binding selectivity profiles.
+              </p>
             </div>
           </div>
         </>
