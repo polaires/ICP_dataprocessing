@@ -1,0 +1,9 @@
+{
+  "datasets": [
+    {
+      "name": "Master Raw Data",
+      "filename": "Master_raw.csv",
+      "description": "Multi-batch lanthanide binding data for Rub mutants"
+    }
+  ]
+}

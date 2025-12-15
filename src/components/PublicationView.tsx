@@ -438,7 +438,7 @@ export function PublicationView() {
             <p className="text-sm text-gray-500 mb-4">
               Comparing {displayMutants.length} mutants under {selectedCondition} condition
             </p>
-            <ResponsiveContainer width="100%" height={400}>
+            <ResponsiveContainer width="100%" height={450}>
               <ComposedChart margin={{ top: 20, right: 30, bottom: 60, left: 60 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                 <XAxis
@@ -460,7 +460,9 @@ export function PublicationView() {
                     return (
                       <div className="bg-white border rounded shadow-lg p-3 text-sm">
                         <p className="font-semibold" style={{ color: point.color }}>{point.mutant}</p>
-                        <p>{point.element}: {point.selectivity?.toFixed(1)}%</p>
+                        <p style={{ color: ELEMENT_COLORS[point.element] }}>
+                          <strong>{point.element}</strong>: {point.selectivity?.toFixed(1)}%
+                        </p>
                         <p className="text-gray-500">k_ex: {point.kex?.toFixed(2)}</p>
                       </div>
                     );
@@ -468,7 +470,33 @@ export function PublicationView() {
                 />
                 <Legend />
 
-                {/* Scatter points and lines for each mutant */}
+                {/* Regression lines - render first (behind scatter) */}
+                {displayMutants.map((mutant, idx) => {
+                  const color = getMutantColor(mutant.baseName, idx);
+                  const minKex = 0.5;
+                  const maxKex = 7.5;
+                  const lineData = [
+                    { kex: minKex, y: Math.max(0, mutant.kexIntercept + mutant.kexSlope * minKex) },
+                    { kex: maxKex, y: Math.max(0, mutant.kexIntercept + mutant.kexSlope * maxKex) },
+                  ];
+
+                  // Show regression line for all binding mutants (removed R² threshold)
+                  return (
+                    <Line
+                      key={`line-${mutant.name}`}
+                      data={lineData}
+                      dataKey="y"
+                      stroke={color}
+                      strokeWidth={2}
+                      strokeOpacity={0.7}
+                      dot={false}
+                      name={`${mutant.baseName} (R²=${mutant.kexR2.toFixed(2)})`}
+                      legendType="line"
+                    />
+                  );
+                })}
+
+                {/* Scatter points - render second (on top) */}
                 {displayMutants.map((mutant, idx) => {
                   const color = getMutantColor(mutant.baseName, idx);
                   const scatterData = elementsWithKex.map(e => ({
@@ -479,39 +507,39 @@ export function PublicationView() {
                     color,
                   }));
 
-                  // Regression line
-                  const minKex = 0.5;
-                  const maxKex = 7.5;
-                  const lineData = [
-                    { kex: minKex, y: mutant.kexIntercept + mutant.kexSlope * minKex },
-                    { kex: maxKex, y: mutant.kexIntercept + mutant.kexSlope * maxKex },
-                  ];
-
                   return (
-                    <g key={mutant.name}>
-                      {mutant.kexR2 >= 0.1 && (
-                        <Line
-                          data={lineData}
-                          dataKey="y"
-                          stroke={color}
-                          strokeWidth={2}
-                          dot={false}
-                          name={`${mutant.baseName} (R²=${mutant.kexR2.toFixed(2)})`}
-                          legendType="line"
-                        />
-                      )}
-                      <Scatter
-                        data={scatterData}
-                        dataKey="selectivity"
-                        fill={color}
-                        name={mutant.baseName}
-                        legendType="circle"
-                      />
-                    </g>
+                    <Scatter
+                      key={`scatter-${mutant.name}`}
+                      data={scatterData}
+                      dataKey="selectivity"
+                      fill={color}
+                      name={mutant.baseName}
+                      legendType="circle"
+                    />
                   );
                 })}
               </ComposedChart>
             </ResponsiveContainer>
+
+            {/* Element legend */}
+            <div className="mt-4 pt-4 border-t">
+              <p className="text-xs text-gray-500 mb-2">Elements by k_ex position:</p>
+              <div className="flex flex-wrap gap-2">
+                {elementsWithKex.map(e => (
+                  <span
+                    key={e}
+                    className="text-xs px-2 py-1 rounded"
+                    style={{
+                      backgroundColor: `${ELEMENT_COLORS[e]}20`,
+                      color: ELEMENT_COLORS[e],
+                      border: `1px solid ${ELEMENT_COLORS[e]}40`,
+                    }}
+                  >
+                    {e} (k_ex={WATER_EXCHANGE_RATES[e]?.toFixed(1)})
+                  </span>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* Metrics Comparison - Side by Side */}
