@@ -1,0 +1,98 @@
+================================================================================
+ EU3P COORDINATION COMPARATIVE ANALYSIS REPORT
+ Analysis Mode: 3 Replicates Per Mutant
+================================================================================
+
+Number of mutants analyzed: 12
+Mutants: Rub10, Rub11, Rub12, Rub13, Rub14, Rub15, Rub16, Rub17, Rub18, Rub20, Rub7, Rub9
+Target replicates per mutant: 3
+
+--------------------------------------------------------------------------------
+DATA COMPLETENESS SUMMARY:
+--------------------------------------------------------------------------------
+Complete datasets (3/3 runs): 12
+Partial datasets: 0
+
+✓ Rub10: 3/3 runs
+✓ Rub11: 3/3 runs
+✓ Rub12: 3/3 runs
+✓ Rub13: 3/3 runs
+✓ Rub14: 3/3 runs
+✓ Rub15: 3/3 runs
+✓ Rub16: 3/3 runs
+✓ Rub17: 3/3 runs
+✓ Rub18: 3/3 runs
+✓ Rub20: 3/3 runs
+✓ Rub7: 3/3 runs
+✓ Rub9: 3/3 runs
+
+--------------------------------------------------------------------------------
+RANKING BY WATER EXCHANGE RATE (High to Low):
+--------------------------------------------------------------------------------
+1. Rub9: 6.865 ± 1.161 events/ns (n=3)
+2. Rub12: 6.694 ± 0.324 events/ns (n=3)
+3. Rub15: 3.942 ± 0.027 events/ns (n=3)
+4. Rub11: 3.925 ± 0.207 events/ns (n=3)
+5. Rub17: 3.769 ± 0.684 events/ns (n=3)
+6. Rub13: 3.542 ± 0.404 events/ns (n=3)
+7. Rub18: 3.475 ± 0.992 events/ns (n=3)
+8. Rub7: 3.363 ± 0.378 events/ns (n=3)
+9. Rub10: 2.960 ± 0.277 events/ns (n=3)
+10. Rub16: 2.677 ± 0.589 events/ns (n=3)
+11. Rub14: 2.331 ± 0.738 events/ns (n=3)
+12. Rub20: 1.748 ± 0.346 events/ns (n=3)
+
+--------------------------------------------------------------------------------
+AVERAGE STATISTICS ACROSS ALL MUTANTS:
+--------------------------------------------------------------------------------
+binding_volume: 25.205 ± 0.353 (n=12)
+mean_bond_angle: 97.996 ± 0.077 (n=12)
+mean_bond_distance: 2.448 ± 0.006 (n=12)
+mean_residence_time: 39.528 ± 4.293 (n=12)
+protein_change_freq: 31.988 ± 2.261 (n=12)
+protein_coord_mean: 6.710 ± 0.210 (n=12)
+total_coord_mean: 8.485 ± 0.082 (n=12)
+water_change_freq: 10.083 ± 0.825 (n=12)
+water_coord_mean: 1.776 ± 0.210 (n=12)
+water_exchange_rate: 3.774 ± 0.448 (n=12)
+
+--------------------------------------------------------------------------------
+STABILITY ANALYSIS:
+--------------------------------------------------------------------------------
+Most Stable Mutants (lowest coordination change frequency):
+  1. Rub7: 14.4% average change frequency (n=3)
+  2. Rub16: 15.5% average change frequency (n=3)
+  3. Rub17: 16.9% average change frequency (n=3)
+
+Most Dynamic Mutants (highest coordination change frequency):
+  1. Rub12: 30.6% average change frequency (n=3)
+  2. Rub13: 25.2% average change frequency (n=3)
+  3. Rub9: 25.1% average change frequency (n=3)
+
+--------------------------------------------------------------------------------
+COORDINATION GEOMETRY PREFERENCES:
+--------------------------------------------------------------------------------
+Rub10: Tricapped Trigonal Prismatic (n=3)
+Rub11: Tricapped Trigonal Prismatic (n=3)
+Rub12: Tricapped Trigonal Prismatic (n=3)
+Rub13: Tricapped Trigonal Prismatic (n=3)
+Rub14: Tricapped Trigonal Prismatic (n=3)
+Rub15: Tricapped Trigonal Prismatic (n=3)
+Rub16: Tricapped Trigonal Prismatic (n=3)
+Rub17: Tricapped Trigonal Prismatic (n=3)
+Rub18: Tricapped Trigonal Prismatic (n=3)
+Rub20: Tricapped Trigonal Prismatic (n=3)
+Rub7: High Coordination 10 (n=3)
+Rub9: Tricapped Trigonal Prismatic (n=3)
+
+--------------------------------------------------------------------------------
+STATISTICAL NOTES:
+--------------------------------------------------------------------------------
+Target replicates: 3
+Values reported as mean ± SEM (standard error of mean)
+n = number of replicate runs included in analysis
+Complete datasets have higher statistical reliability
+
+================================================================================
+ END OF REPORT
+================================================================================

@@ -1,0 +1,132 @@
+EU3P COORDINATION ANALYSIS SUMMARY
+================================================================================
+
+coordination_numbers:
+  total:
+    mean: 8.291677080729817
+    std: 1.398271940858404
+    min: 2
+    max: 10
+    median: 9.0
+  water:
+    mean: 0.9137715571107223
+    std: 0.280701083941919
+    min: 0
+    max: 1
+    median: 1.0
+  protein:
+    mean: 7.377905523619095
+    std: 1.2529003441032005
+    min: 2
+    max: 9
+    median: 8.0
+coordination_geometry:
+  distribution:
+    tricapped_trigonal_prismatic: 71.73206698325419
+    high_coordination_10: 1.5246188452886777
+    trigonal_bipyramidal: 4.923769057735567
+    pentagonal_bipyramidal: 5.348662834291427
+    square_antiprismatic: 6.64833791552112
+    octahedral: 7.2481879530117475
+    distorted_tetrahedral: 0.6748312921769558
+    square_planar: 0.5748562859285179
+    tetrahedral: 0.6498375406148462
+    pyramidal: 0.6498375406148462
+    bent: 0.024993751562109475
+  most_common: ('tricapped_trigonal_prismatic', 2870)
+  n_unique_geometries: 11
+bond_angles:
+  mean: 98.22753524636957
+  std: 31.367102501992793
+  min: 28.638686507949245
+  max: 175.89525189445993
+  median: 84.3559174756174
+bond_distances:
+  mean: 2.410601115345326
+  std: 0.10771764311937738
+  min: 2.181880474090576
+  max: 3.7968549728393555
+  median: 2.3993544578552246
+binding_site:
+  radius_of_gyration:
+    mean: 2.3624751567840576
+    std: 0.11157852411270142
+    min: 1.5611181259155273
+    max: 2.609330892562866
+    median: 2.3968639373779297
+  mean_coord_distance:
+    mean: 2.410245180130005
+    std: 0.02877635881304741
+    min: 2.2980237007141113
+    max: 2.6585147380828857
+    median: 2.407756805419922
+  max_coord_distance:
+    mean: 2.5700953006744385
+    std: 0.17926672101020813
+    min: 2.335937738418579
+    max: 3.7968549728393555
+    median: 2.54013991355896
+  min_coord_distance:
+    mean: 2.2938976287841797
+    std: 0.03348145633935928
+    min: 2.181880474090576
+    max: 2.469050168991089
+    median: 2.293689012527466
+  binding_site_volume:
+    mean: 23.94696812098746
+    std: 7.870785033007418
+    min: 0.19673220919627007
+    max: 64.65176160158278
+    median: 27.165053843805325
+  asymmetry:
+    mean: 0.08712434768676758
+    std: 0.05320211127400398
+    min: 0.009733302518725395
+    max: 0.5657914876937866
+    median: 0.07909658551216125
+  accessibility_score:
+    mean: 0.08039656752478547
+    std: 0.15388336678625483
+    min: 0.0
+    max: 0.7777777777777778
+    median: 0.0
+  occupied_octants:
+    mean: 6.841789552611847
+    std: 1.2445183768041652
+    min: 2
+    max: 8
+    median: 7.0
+  empty_octants:
+    mean: 1.158210447388153
+    std: 1.2445183768041652
+    min: 0
+    max: 6
+    median: 1.0
+water_exchange:
+  total_entry_events: 151
+  total_exit_events: 150
+  exchange_rate: 1.88125
+  residence_times:
+    mean: 73.1
+    std: 0.0
+    min: 73.1
+    max: 73.1
+    median: 73.1
+spatial_accessibility:
+  mean_empty_octants: 1.158210447388153
+  std_empty_octants: 1.2445183768041652
+  high_accessibility_frequency: 7.923019245188703
+coordination_stability:
+  total_coordination_changes:
+    mean_change: 0.4125
+    max_change: 5
+    change_frequency: 25.650000000000002
+  water_coordination_changes:
+    mean_change: 0.075
+    max_change: 1
+    change_frequency: 7.5
+  protein_coordination_changes:
+    mean_change: 0.379
+    max_change: 5
+    change_frequency: 24.425
+  more_dynamic_species: protein
