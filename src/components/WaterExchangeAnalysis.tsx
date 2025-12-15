@@ -18,7 +18,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
   ReferenceLine,
   ZAxis,
@@ -404,10 +403,10 @@ export function WaterExchangeAnalysis() {
                     style: { fontWeight: 'bold' },
                   }}
                 />
-                <ZAxis dataKey="ionicRadius" range={[80, 400]} />
+                <ZAxis dataKey="ionicRadius" range={[80, 400]} name="Ionic Radius" />
                 <Tooltip content={<CustomTooltip />} />
 
-                {/* Regression lines */}
+                {/* Regression lines using svg line elements */}
                 {showFitLines && lightRegression && lightData.length >= 2 && (
                   <ReferenceLine
                     segment={[
@@ -417,6 +416,7 @@ export function WaterExchangeAnalysis() {
                     stroke="#ef4444"
                     strokeWidth={2}
                     strokeDasharray="8 4"
+                    ifOverflow="extendDomain"
                   />
                 )}
 
@@ -429,55 +429,66 @@ export function WaterExchangeAnalysis() {
                     stroke="#3b82f6"
                     strokeWidth={2}
                     strokeDasharray="4 4"
+                    ifOverflow="extendDomain"
                   />
                 )}
 
-                {/* Light lanthanides */}
+                {/* Single scatter with all data points - fixes tooltip issue */}
                 <Scatter
-                  name="Light Lanthanides (La-Eu)"
-                  data={lightData}
-                  shape={colorBy === 'series' ? 'circle' : 'circle'}
+                  name="Lanthanides"
+                  data={dataPoints.filter(d => d.binding > 0)}
                 >
-                  {lightData.map((entry, index) => (
-                    <Cell
-                      key={`light-${index}`}
-                      fill={colorBy === 'unpaired' ? getUnpairedElectronColor(entry.unpairedElectrons) : '#ef4444'}
-                      stroke="#000"
-                      strokeWidth={1}
-                      r={Math.sqrt(getBubbleSize(entry.ionicRadius) / Math.PI)}
-                    />
-                  ))}
+                  {dataPoints.filter(d => d.binding > 0).map((entry, index) => {
+                    const size = Math.sqrt(getBubbleSize(entry.ionicRadius) / Math.PI);
+                    const fill = colorBy === 'unpaired'
+                      ? getUnpairedElectronColor(entry.unpairedElectrons)
+                      : entry.isLight ? '#ef4444' : '#3b82f6';
+
+                    return (
+                      <Cell
+                        key={`cell-${entry.element}`}
+                        fill={fill}
+                        stroke="#000"
+                        strokeWidth={1}
+                      />
+                    );
+                  })}
                 </Scatter>
 
-                {/* Heavy lanthanides */}
-                <Scatter
-                  name="Heavy Lanthanides (Gd-Lu)"
-                  data={heavyData}
-                  shape={colorBy === 'series' ? 'square' : 'circle'}
-                >
-                  {heavyData.map((entry, index) => (
-                    <Cell
-                      key={`heavy-${index}`}
-                      fill={colorBy === 'unpaired' ? getUnpairedElectronColor(entry.unpairedElectrons) : '#3b82f6'}
-                      stroke="#000"
-                      strokeWidth={1}
-                      r={Math.sqrt(getBubbleSize(entry.ionicRadius) / Math.PI)}
-                    />
-                  ))}
-                </Scatter>
-
-                <Legend
-                  wrapperStyle={{ paddingTop: 20 }}
-                  formatter={(value) => <span className="text-sm">{value}</span>}
-                />
               </ScatterChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Element labels overlay */}
+          {/* Chart Legend */}
+          {colorBy === 'series' && (
+            <div className="flex justify-center items-center gap-6 mt-2 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-full bg-red-500 border border-black"></div>
+                <span>Light Lanthanides (La-Eu)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-full bg-blue-500 border border-black"></div>
+                <span>Heavy Lanthanides (Gd-Lu)</span>
+              </div>
+            </div>
+          )}
+
+          {/* Element labels as a reference */}
           {showLabels && (
-            <div className="text-xs text-gray-600 text-center">
-              Element labels shown in tooltip on hover
+            <div className="bg-gray-50 rounded-lg p-3">
+              <p className="text-xs text-gray-500 mb-2">Elements by k_ex value (hover points to see details):</p>
+              <div className="flex flex-wrap gap-2">
+                {dataPoints.filter(d => d.binding > 0).sort((a, b) => a.kEx - b.kEx).map(d => (
+                  <span
+                    key={d.element}
+                    className={`text-xs px-2 py-1 rounded font-medium ${
+                      d.isLight ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
+                    }`}
+                  >
+                    {d.element} (k_ex={d.kEx.toFixed(1)})
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 
